@@ -37,15 +37,11 @@ ssize_t KittyIOFile::Read(uintptr_t offset, void *buffer, size_t len)
     do
     {
         errno = 0, _error = 0;
-#ifdef __LP64__
-        ssize_t readSize = pread64(_fd, buf + bytesRead, len - bytesRead, (int64_t)offset + bytesRead);
-#else
-        ssize_t readSize = pread(_fd, buf + bytesRead, len - bytesRead, (int32_t)offset + bytesRead);
-#endif
+        ssize_t readSize = pread64(_fd, buf + bytesRead, len - bytesRead, offset + bytesRead);
         if (readSize <= 0)
         {
             _error = errno;
-            return bytesRead > 0 ? bytesRead : readSize;
+            break;
         }
 
         bytesRead += readSize;
@@ -60,15 +56,11 @@ ssize_t KittyIOFile::Write(uintptr_t offset, const void *buffer, size_t len)
     do
     {
         errno = 0, _error = 0;
-#ifdef __LP64__
-        ssize_t writeSize = pwrite64(_fd, buf + bytesWritten, len - bytesWritten, (int64_t)offset + bytesWritten);
-#else
-        ssize_t writeSize = pwrite(_fd, buf + bytesWritten, len - bytesWritten, (int32_t)offset + bytesWritten);
-#endif
+        ssize_t writeSize = pwrite64(_fd, buf + bytesWritten, len - bytesWritten, offset + bytesWritten);
         if (writeSize <= 0)
         {
             _error = errno;
-            return bytesWritten > 0 ? bytesWritten : writeSize;
+            break;
         }
 
         bytesWritten += writeSize;

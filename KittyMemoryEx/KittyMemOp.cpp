@@ -76,12 +76,11 @@ bool KittyMemSys::init(pid_t pid)
 
     errno = 0;
     ssize_t rt = syscall(syscall_rpmv_n, 0, 0, 0, 0, 0, 0);
-    if(rt == -1 && errno == ENOSYS)
+    if (rt == -1 && errno == ENOSYS)
     {
         KITTY_LOGE("KittyMemSys: syscall not supported.");
         return false;
     }
-
 
     _pid = pid;
     return true;
@@ -190,7 +189,8 @@ size_t KittyMemIO::Read(uintptr_t address, void *buffer, size_t len) const
     if (_pid < 1 || !address || !buffer || !len || !_pMem.get())
         return 0;
 
-    return _pMem->Read(address, buffer, len);
+    ssize_t bytes = _pMem->Read(address, buffer, len);
+    return bytes > 0 ? bytes : 0;
 }
 
 size_t KittyMemIO::Write(uintptr_t address, void *buffer, size_t len) const
@@ -198,5 +198,6 @@ size_t KittyMemIO::Write(uintptr_t address, void *buffer, size_t len) const
     if (_pid < 1 || !address || !buffer || !len || !_pMem.get())
         return 0;
 
-    return _pMem->Write(address, buffer, len);
+    ssize_t bytes = _pMem->Write(address, buffer, len);
+    return bytes > 0 ? bytes : 0;
 }
