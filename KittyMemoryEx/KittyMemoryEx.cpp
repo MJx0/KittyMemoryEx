@@ -217,7 +217,7 @@ namespace KittyMemoryEx
         return retMaps;
     }
 
-    ProcMap getAddressMap(pid_t pid, const void *address)
+    ProcMap getAddressMap(pid_t pid, uintptr_t address)
     {
         ProcMap retMap{};
 
@@ -227,7 +227,7 @@ namespace KittyMemoryEx
         auto maps = getAllMaps(pid);
         for (auto &it : maps)
         {
-            if (it.isValid() && (uintptr_t)address >= it.startAddress && (uintptr_t)address <= it.endAddress)
+            if (it.isValid() && address >= it.startAddress && address <= it.endAddress)
             {
                 retMap = it;
                 break;

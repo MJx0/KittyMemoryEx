@@ -49,22 +49,22 @@ namespace KittyMemoryEx
   std::vector<ProcMap> getAllMaps(pid_t pid);
 
   /*
-   * Gets info of all maps which pathname equals @name in /proc/[pid]/maps
+   * Gets info of all maps which pathname equals name in /proc/[pid]/maps
    */
   std::vector<ProcMap> getMapsEqual(pid_t pid, const std::string &name);
 
   /*
-   * Gets info of all maps which pathname contains @name in /proc/[pid]/maps
+   * Gets info of all maps which pathname contains name in /proc/[pid]/maps
    */
   std::vector<ProcMap> getMapsContain(pid_t pid, const std::string &name);
 
   /*
-   * Gets info of all maps which pathname ends with @name in /proc/[pid]/maps
+   * Gets info of all maps which pathname ends with name in /proc/[pid]/maps
    */
   std::vector<ProcMap> getMapsEndWith(pid_t pid, const std::string &name);
 
   /*
-   * Gets map info of an @address in /proc/[pid]/maps
+   * Gets map info of an address in /proc/[pid]/maps
    */
-  ProcMap getAddressMap(pid_t pid, const void *address);
+  ProcMap getAddressMap(pid_t pid, uintptr_t address);
 }

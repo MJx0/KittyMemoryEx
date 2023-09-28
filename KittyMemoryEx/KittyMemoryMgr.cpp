@@ -69,7 +69,7 @@ bool KittyMemoryMgr::initialize(pid_t pid, EKittyMemOP eMemOp, bool initMemPatch
 
 #ifdef __ANDROID__
     // refs https://fadeevab.com/shared-library-injection-on-android-8/
-    uintptr_t defaultCaller = getElfBaseMap("libRS.so").startAddress;
+    uintptr_t defaultCaller = getElfBaseMap("libRS.so").map.startAddress;
 #else
     uintptr_t defaultCaller = 0;
 #endif
@@ -119,24 +119,95 @@ bool KittyMemoryMgr::isValidELF(uintptr_t elfBase) const
     return readMem(elfBase, magic, sizeof(magic)) && memcmp(magic, "\177ELF", 4) == 0;
 }
 
-KittyMemoryEx::ProcMap KittyMemoryMgr::getElfBaseMap(const std::string &elfName) const
+ElfBaseMap KittyMemoryMgr::getElfBaseMap(const std::string &elfName) const
 {
-    KittyMemoryEx::ProcMap ret{};
+    ElfBaseMap ret{};
 
     if (!isMemValid() || elfName.empty())
         return ret;
 
+    std::vector<ElfBaseMap> elfMaps;
+
     auto maps = KittyMemoryEx::getMapsContain(_pid, elfName);
     for (auto &it : maps)
     {
-        if (isValidELF(it.startAddress) && elfScanner.createWithMap(it).isValid())
+        if (!isValidELF(it.startAddress))
+            continue;
+
+        auto elf = elfScanner.createWithMap(it);
+        if (elf.isValid())
         {
-            ret = it;
-            break;
+            ElfBaseMap ebp;
+            ebp.map = it;
+            ebp.elfScan = elf;
+            elfMaps.push_back(ebp);
+        }
+    }
+
+    if (elfMaps.empty())
+        return ret;
+
+    ret = elfMaps.front();
+
+    if (elfMaps.size() == 1)
+        return ret;
+
+    // check which elf has most maps
+    // ghetto solution but it works
+
+    int nMostMaps = 0;
+
+    auto allMaps = KittyMemoryEx::getAllMaps(_pid);
+    for (auto &currElf : elfMaps)
+    {
+        int numMaps = 0;
+        uintptr_t start = currElf.map.startAddress, end = start + currElf.elfScan.loadSize();
+        if (start >= end)
+            continue;
+
+        for (auto &currMap : allMaps)
+        {
+            if (currMap.startAddress >= start && currMap.endAddress <= end)
+                numMaps++;
+
+            if (currMap.endAddress > end)
+                break;
+        }
+
+        if (numMaps > nMostMaps)
+        {
+            ret = currElf;
+            nMostMaps = numMaps;
         }
     }
 
     return ret;
+}
+
+uintptr_t KittyMemoryMgr::findRemoteOf(const char *symbol_name, uintptr_t local_address) const
+{
+    if (!isMemValid() || !symbol_name || !local_address)
+        return 0;
+
+    ElfBaseMap remoteLib{};
+
+    auto localLib = KittyMemoryEx::getAddressMap(getpid(), local_address);
+    if (localLib.isValid())
+        remoteLib = getElfBaseMap(localLib.pathname);
+
+    if (!remoteLib.isValid())
+    {
+        KITTY_LOGE("KittyInjector: Failed to find %s, remote lib not found.", symbol_name);
+        return 0;
+    }
+    
+    uintptr_t remote_address = remoteLib.elfScan.findSymbol(symbol_name);
+    
+    // fallback
+    if (!remote_address)
+        remote_address = local_address - localLib.startAddress + remoteLib.map.startAddress;
+
+    return remote_address;
 }
 
 bool KittyMemoryMgr::dumpMemRange(uintptr_t start, uintptr_t end, const std::string &destination) const

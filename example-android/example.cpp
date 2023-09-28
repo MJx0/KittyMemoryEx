@@ -38,7 +38,7 @@ int main(int argc, char *args[])
 
     KITTY_LOGI("================ GET ELF BASE ===============");
     
-    ProcMap g_il2cppBaseMap;
+    ElfBaseMap g_il2cppBaseMap;
     // loop until our target library is found
     do
     {
@@ -47,7 +47,7 @@ int main(int argc, char *args[])
         g_il2cppBaseMap = kittyMemMgr.getElfBaseMap("libil2cpp.so");
     } while (!g_il2cppBaseMap.isValid());
     
-    uintptr_t il2cppBase = g_il2cppBaseMap.startAddress;
+    uintptr_t il2cppBase = g_il2cppBaseMap.map.startAddress;
     KITTY_LOGI("libil2cpp.so base: %p", (void *)il2cppBase);
     
     KITTY_LOGI("================ MEMORY READ & WRITE ===============");
@@ -67,8 +67,8 @@ int main(int argc, char *args[])
     KITTY_LOGI("==================== SYMBOL LOOKUP ===================");
 
     // initialize an ELFScanner instance using elfScanner createWithMap or createWithBase
-    ElfScanner il2cppElf = kittyMemMgr.elfScanner.createWithBase(il2cppBase);
-    // ElfScanner il2cppElf = kittyMemMgr.elfScanner.createWithMap(g_il2cppBaseMap);
+    // ElfScanner il2cppElf = kittyMemMgr.elfScanner.createWithMap(g_il2cppBaseMap.map);
+	ElfScanner il2cppElf = g_il2cppBaseMap.elfScan;
     KITTY_LOGI("il2cpp elf valid = %d", il2cppElf.isValid() ? 1 : 0);
     KITTY_LOGI("il2cpp_string_new = %p", (void *)il2cppElf.findSymbol("il2cpp_string_new"));
 
@@ -138,8 +138,8 @@ int main(int argc, char *args[])
     uintptr_t found_at = 0;
     std::vector<uintptr_t> found_at_list;
 
-    uintptr_t search_start = g_il2cppBaseMap.startAddress;
-    uintptr_t search_end = g_il2cppBaseMap.endAddress;
+    uintptr_t search_start = g_il2cppBaseMap.map.startAddress;
+    uintptr_t search_end = g_il2cppBaseMap.map.endAddress;
 
     // scan with direct bytes & get one result
     found_at = kittyMemMgr.memScanner.findBytesFirst(search_start, search_end, "\x33\x44\x55\x66\x00\x77\x88\x00\x99", "xxxx??x?x");
@@ -196,12 +196,11 @@ int main(int argc, char *args[])
 #else
     auto libcMap = kittyMemMgr.getElfBaseMap("/lib/libc.so");
 #endif
-    auto libcElf = kittyMemMgr.elfScanner.createWithMap(libcMap);
-    uintptr_t remote_mmap = libcElf.findSymbol("mmap");
-    uintptr_t remote_munmap = libcElf.findSymbol("munmap");
+    uintptr_t remote_mmap = libcMap.elfScan.findSymbol("mmap");
+    uintptr_t remote_munmap = libcMap.elfScan.findSymbol("munmap");
 
-    KITTY_LOGI("libc [ base = %p | elf isValid: %d | remote_mmap = %p | remote_mmap = %p ]",
-               (void *)libcMap.startAddress, libcElf.isValid() ? 1 : 0, (void *)remote_mmap, (void*)remote_munmap);
+    KITTY_LOGI("libc [ base = %p | remote_mmap = %p | remote_mmap = %p ]",
+               (void *)libcMap.map.startAddress, (void *)remote_mmap, (void*)remote_munmap);
 
     // mmap(nullptr, 0xff, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
     uintptr_t mmap_ret = kittyMemMgr.trace.callFunction(remote_mmap, 6,
