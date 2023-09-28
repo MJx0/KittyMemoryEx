@@ -53,10 +53,12 @@ class KittyTraceMgr
 private:
     IKittyMemOp *_pMemOp;
     uintptr_t _defaultCaller;
+    bool _autoRestoreRegs;
 
 public:
-    KittyTraceMgr() : _pMemOp(nullptr), _defaultCaller(0) {}
-    KittyTraceMgr(IKittyMemOp *pMemOp, uintptr_t defaultCaller = 0) : _pMemOp(pMemOp), _defaultCaller(defaultCaller) {}
+    KittyTraceMgr() : _pMemOp(nullptr), _defaultCaller(0), _autoRestoreRegs(true) {}
+    KittyTraceMgr(IKittyMemOp *pMemOp, uintptr_t defaultCaller = 0, bool autoRestoreRegs = true)
+        : _pMemOp(pMemOp), _defaultCaller(defaultCaller), _autoRestoreRegs(autoRestoreRegs) {}
 
     inline pid_t remotePID() const { return _pMemOp ? _pMemOp->remotePID() : 0; }
 
@@ -97,6 +99,13 @@ public:
      * PTRACE_SETREG / PTRACE_SETREGSET
      */
     bool setRegs(pt_regs *regs) const;
+
+    inline bool autoRestoreRegs() const { return _autoRestoreRegs; }
+
+    /**
+     * Automatically back up and restore regs after a remote function call
+     */
+    inline void setAutoRestoreRegs(bool flag) { _autoRestoreRegs = flag; }
 
     /**
      * Call remote function and spoof return address

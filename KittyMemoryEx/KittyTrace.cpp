@@ -145,7 +145,8 @@ uintptr_t KittyTraceMgr::callFunctionFrom(uintptr_t callerAddress, uintptr_t fun
     // cleanup failure return
     auto failure_return = [&]() -> uintptr_t
     {
-        setRegs(&backup_regs);
+        if (_autoRestoreRegs)
+            setRegs(&backup_regs);
         return 0;
     };
 
@@ -301,7 +302,8 @@ uintptr_t KittyTraceMgr::callFunctionFrom(uintptr_t callerAddress, uintptr_t fun
     uintptr_t result = REGS_RETURN_VALUE(return_regs);
 
     // Restore regs
-    setRegs(&backup_regs);
+    if (_autoRestoreRegs)
+        setRegs(&backup_regs);
 
     KITTY_LOGD("Calling function %p returned %p.", (void *)functionAddress, (void *)result);
     return result;
