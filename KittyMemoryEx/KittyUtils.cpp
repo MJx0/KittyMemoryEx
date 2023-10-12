@@ -43,6 +43,22 @@ namespace KittyUtils
         return true;
     }
 
+    std::string random_string(size_t length)
+    {
+        auto randchar = []() -> char
+        {
+            const char charset[] =
+                "0123456789"
+                "ABCDEFGHIJKLMNOPQRSTUVWXYZ"
+                "abcdefghijklmnopqrstuvwxyz";
+            const int max_index = (sizeof(charset) - 1);
+            return charset[randInt(0, max_index)];
+        };
+        std::string str(length, 0);
+        std::generate_n(str.begin(), length, randchar);
+        return str;
+    }
+
     std::string strfmt(const char *fmt, ...)
     {
         if (!fmt)

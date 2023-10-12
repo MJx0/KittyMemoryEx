@@ -100,7 +100,7 @@ size_t KittyMemSys::Read(uintptr_t address, void *buffer, size_t len) const
     remote[0].iov_len = len;
 
     errno = 0;
-    ssize_t bytes = call_process_vm_readv(_pid, &local[0], 1, &remote[0], 1, 0);
+    ssize_t bytes = KT_EINTR_RETRY(call_process_vm_readv(_pid, &local[0], 1, &remote[0], 1, 0));
     if (bytes == -1)
     {
         int err = errno;
@@ -137,7 +137,7 @@ size_t KittyMemSys::Write(uintptr_t address, void *buffer, size_t len) const
     remote[0].iov_len = len;
 
     errno = 0;
-    ssize_t bytes = call_process_vm_writev(_pid, &local[0], 1, &remote[0], 1, 0);
+    ssize_t bytes = KT_EINTR_RETRY(call_process_vm_writev(_pid, &local[0], 1, &remote[0], 1, 0));
     if (bytes == -1)
     {
         int err = errno;

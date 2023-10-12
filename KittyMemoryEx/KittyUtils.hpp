@@ -21,6 +21,7 @@
 #include <vector>
 #include <utility>
 #include <map>
+#include <random>
 
 #include <elf.h>
 #ifdef __LP64__
@@ -48,9 +49,9 @@
 #define KITTY_LOGD(fmt, ...) ((void)__android_log_print(ANDROID_LOG_DEBUG, KITTY_LOG_TAG, fmt, ##__VA_ARGS__))
 #else
 #define KITTY_LOGD(fmt, ...) \
-  do                         \
-  {                          \
-  } while (0)
+    do                       \
+    {                        \
+    } while (0)
 #endif
 
 #define KITTY_LOGI(fmt, ...) ((void)__android_log_print(ANDROID_LOG_INFO, KITTY_LOG_TAG, fmt, ##__VA_ARGS__))
@@ -63,9 +64,9 @@
 #define KITTY_LOGD(fmt, ...) printf("D: " fmt "\n", ##__VA_ARGS__)
 #else
 #define KITTY_LOGD(fmt, ...) \
-  do                         \
-  {                          \
-  } while (0)
+    do                       \
+    {                        \
+    } while (0)
 #endif
 
 #define KITTY_LOGI(fmt, ...) printf("I: " fmt "\n", ##__VA_ARGS__)
@@ -73,6 +74,13 @@
 #define KITTY_LOGW(fmt, ...) printf("W: " fmt "\n", ##__VA_ARGS__)
 
 #endif
+
+#define KT_EINTR_RETRY(exp) ({         \
+    __typeof__(exp) _rc;                   \
+    do {                                   \
+        _rc = (exp);                       \
+    } while (_rc == -1 && errno == EINTR); \
+    _rc; })
 
 namespace KittyUtils
 {
@@ -89,6 +97,19 @@ namespace KittyUtils
 
     void trim_string(std::string &str);
     bool validateHexString(std::string &hex);
+
+    template <typename T>
+    T randInt(T min, T max)
+    {
+        using param_type = typename std::uniform_int_distribution<T>::param_type;
+
+        thread_local static std::mt19937 gen{std::random_device{}()};
+        thread_local static std::uniform_int_distribution<T> dist;
+
+        return dist(gen, param_type{min, max});
+    }
+
+    std::string random_string(size_t length);
 
     std::string strfmt(const char *fmt, ...);
 

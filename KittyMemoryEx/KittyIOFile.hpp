@@ -12,10 +12,14 @@ private:
     int _error;
 
 public:
-    KittyIOFile(const std::string &filePath, int flags, mode_t mode) : _fd(0), _filePath(filePath),
-                                                                       _flags(flags), _mode(mode), _error(0) {}
-    KittyIOFile(const std::string &filePath, int flags) : _fd(0), _filePath(filePath),
-                                                          _flags(flags), _mode(0), _error(0) {}
+    KittyIOFile() : _fd(0), _flags(0), _mode(0), _error(0) {}
+
+    KittyIOFile(const std::string &filePath, int flags, mode_t mode)
+        : _fd(0), _filePath(filePath), _flags(flags), _mode(mode), _error(0) {}
+
+    KittyIOFile(const std::string &filePath, int flags)
+        : _fd(0), _filePath(filePath), _flags(flags), _mode(0), _error(0) {}
+
     ~KittyIOFile()
     {
         if (_fd > 0)
@@ -46,9 +50,17 @@ public:
 
     inline bool isFile()
     {
-        struct stat path_stat;
-        return stat(_filePath.c_str(), &path_stat) != -1 && S_ISREG(path_stat.st_mode);
+        struct stat s;
+        return fstat(_fd, &s) != -1 && S_ISREG(s.st_mode);
     }
 
     inline bool Delete() { return unlink(_filePath.c_str()) != -1; }
+
+    struct stat64 Stat();
+
+    std::vector<char> toBuffer();
+
+    bool writeToFile(const std::string &filePath);
+
+    bool writeToFd(int fd);
 };

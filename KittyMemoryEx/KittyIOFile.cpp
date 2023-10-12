@@ -32,38 +32,72 @@ bool KittyIOFile::Close()
 
 ssize_t KittyIOFile::Read(uintptr_t offset, void *buffer, size_t len)
 {
-    char *buf = (char *)buffer;
-    size_t bytesRead = 0;
-    do
-    {
-        errno = 0, _error = 0;
-        ssize_t readSize = pread64(_fd, buf + bytesRead, len - bytesRead, offset + bytesRead);
-        if (readSize <= 0)
-        {
-            _error = errno;
-            break;
-        }
-
-        bytesRead += readSize;
-    } while (bytesRead < len);
-    return bytesRead;
+    return KT_EINTR_RETRY(pread64(_fd, buffer, len, offset));
 }
 
 ssize_t KittyIOFile::Write(uintptr_t offset, const void *buffer, size_t len)
 {
-    const char *buf = (const char *)buffer;
-    size_t bytesWritten = 0;
+    return KT_EINTR_RETRY(pwrite64(_fd, buffer, len, offset));
+}
+
+struct stat64 KittyIOFile::Stat()
+{
+    errno = 0, _error = 0;
+    struct stat64 s;
+    if (stat64(_filePath.c_str(), &s) == -1)
+        _error = errno;
+    return s;
+}
+
+std::vector<char> KittyIOFile::toBuffer()
+{
+    std::vector<char> buf;
+
+    const size_t len = Stat().st_size;
+    if (!len)
+        return buf;
+
+    buf.resize(len);
+    memset(&buf[0], 0, len);
+
+    Read(0, &buf[0], len);
+    return buf;
+}
+
+bool KittyIOFile::writeToFile(const std::string &filePath)
+{
+    auto buf = toBuffer();
+    if (buf.empty())
+        return false;
+
+    KittyIOFile f(filePath, O_WRONLY | O_CREAT | O_TRUNC | O_CLOEXEC, 0666);
+    return f.Open() && size_t(f.Write(0, buf.data(), buf.size())) == buf.size();
+}
+
+bool KittyIOFile::writeToFd(int fd)
+{
+    if (fd <= 0)
+        return false;
+
+    auto buf = toBuffer();
+    if (buf.empty())
+        return false;
+
+    char *ptr = buf.data();
+    ssize_t len = buf.size();
+
     do
     {
-        errno = 0, _error = 0;
-        ssize_t writeSize = pwrite64(_fd, buf + bytesWritten, len - bytesWritten, offset + bytesWritten);
-        if (writeSize <= 0)
+        ssize_t nwritten = KT_EINTR_RETRY(write(fd, ptr, len));
+        if (nwritten <= 0)
         {
             _error = errno;
-            break;
+            return false;
         }
 
-        bytesWritten += writeSize;
-    } while (bytesWritten < len);
-    return bytesWritten;
+        ptr += nwritten;
+        len -= nwritten;
+    } while (len > 0);
+
+    return true;
 }
