@@ -22,7 +22,7 @@ MemoryBackup::MemoryBackup(IKittyMemOp *pMem, uintptr_t absolute_address, size_t
   _size = 0;
   _orig_code.clear();
 
-  if (!_pMem || !absolute_address || !backup_size)
+  if (!pMem || !absolute_address || !backup_size)
     return;
 
   _pMem = pMem;
