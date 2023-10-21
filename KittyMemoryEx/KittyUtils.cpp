@@ -45,17 +45,15 @@ namespace KittyUtils
 
     std::string random_string(size_t length)
     {
-        auto randchar = []() -> char
-        {
-            const char charset[] =
-                "0123456789"
-                "ABCDEFGHIJKLMNOPQRSTUVWXYZ"
-                "abcdefghijklmnopqrstuvwxyz";
-            const int max_index = (sizeof(charset) - 1);
-            return charset[randInt(0, max_index)];
-        };
-        std::string str(length, 0);
-        std::generate_n(str.begin(), length, randchar);
+        static const std::string chars = "0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz";
+        
+        thread_local static std::default_random_engine rnd(std::random_device{}());
+        thread_local static std::uniform_int_distribution<std::string::size_type> dist(0, chars.size()-1);
+
+        std::string str(length, '\0');
+        for (size_t i = 0; i < length; ++i)
+            str[i] = chars[dist(rnd)];
+
         return str;
     }
 
