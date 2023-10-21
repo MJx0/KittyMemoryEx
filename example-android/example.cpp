@@ -155,6 +155,13 @@ int main(int argc, char *args[])
     found_at_list = kittyMemMgr.memScanner.findHexAll(search_start, search_end, "33 44 55 66 00 77 88 00 99", "xxxx??x?x");
     KITTY_LOGI("found hex results: %zu", found_at_list.size());
 
+    // scan with ida pattern & get one result
+    found_at = kittyMemMgr.memScanner.findIdaPatternFirst(search_start, search_end, "33 ? 55 66 ? 77 88 ? 99");
+    KITTY_LOGI("found ida pattern at: %p", (void *)found_at);
+    // scan with ida pattern & get all results
+    found_at_list = kittyMemMgr.memScanner.findIdaPatternAll(search_start, search_end, "33 ? 55 66 ? 77 88 ? 99");
+    KITTY_LOGI("found ida pattern results: %zu", found_at_list.size());
+
     // scan with data type & get one result
     uint32_t data = 0xdeadbeef;
     found_at = kittyMemMgr.memScanner.findDataFirst(search_start, search_end, &data, sizeof(data));
