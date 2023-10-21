@@ -51,16 +51,22 @@ public:
     inline bool isFile()
     {
         struct stat s;
-        return fstat(_fd, &s) != -1 && S_ISREG(s.st_mode);
+        return stat(_filePath.c_str(), &s) != -1 && S_ISREG(s.st_mode);
     }
 
     inline bool Delete() { return unlink(_filePath.c_str()) != -1; }
 
     struct stat64 Stat();
 
-    std::vector<char> toBuffer();
+    bool readToString(std::string *str);
+    bool readToBuffer(std::vector<char> *buf);
 
     bool writeToFile(const std::string &filePath);
 
     bool writeToFd(int fd);
+
+    static bool readFileToString(const std::string &filePath, std::string *str);
+    static bool readFileToBuffer(const std::string &filePath, std::vector<char> *buf);
+
+    static bool copy(const std::string &srcFilePath, const std::string &dstFilePath);
 };

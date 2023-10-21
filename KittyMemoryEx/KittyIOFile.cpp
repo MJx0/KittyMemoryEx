@@ -32,12 +32,42 @@ bool KittyIOFile::Close()
 
 ssize_t KittyIOFile::Read(uintptr_t offset, void *buffer, size_t len)
 {
-    return KT_EINTR_RETRY(pread64(_fd, buffer, len, offset));
+    char *buf = (char *)buffer;
+    size_t bytesRead = 0;
+    do
+    {
+        errno = 0, _error = 0;
+        ssize_t readSize = KT_EINTR_RETRY(pread64(_fd, buf + bytesRead, len - bytesRead, offset + bytesRead));
+        if (readSize <= 0)
+        {
+            if (readSize < 0)
+                _error = errno;
+            break;
+        }
+
+        bytesRead += readSize;
+    } while (bytesRead < len);
+    return bytesRead;
 }
 
 ssize_t KittyIOFile::Write(uintptr_t offset, const void *buffer, size_t len)
 {
-    return KT_EINTR_RETRY(pwrite64(_fd, buffer, len, offset));
+    const char *buf = (const char *)buffer;
+    size_t bytesWritten = 0;
+    do
+    {
+        errno = 0, _error = 0;
+        ssize_t writeSize = KT_EINTR_RETRY(pwrite64(_fd, buf + bytesWritten, len - bytesWritten, offset + bytesWritten));
+        if (writeSize <= 0)
+        {
+            if (writeSize < 0)
+                _error = errno;
+            break;
+        }
+
+        bytesWritten += writeSize;
+    } while (bytesWritten < len);
+    return bytesWritten;
 }
 
 struct stat64 KittyIOFile::Stat()
@@ -49,29 +79,66 @@ struct stat64 KittyIOFile::Stat()
     return s;
 }
 
-std::vector<char> KittyIOFile::toBuffer()
+bool KittyIOFile::readToString(std::string *str)
 {
-    std::vector<char> buf;
+    if (!str)
+        return false;
 
-    const size_t len = Stat().st_size;
-    if (!len)
-        return buf;
+    str->clear();
 
-    buf.resize(len);
-    memset(&buf[0], 0, len);
+    const ssize_t flen = Stat().st_size;
+    if (flen > 0)
+    {
+        str->resize(flen, 0);
+        return Read(0, str->data(), flen) == flen;
+    }
 
-    Read(0, &buf[0], len);
-    return buf;
+    // incase stat fails to get file size
+    char tmp_buf[4096] = { 0 };
+    ssize_t n = 0, off = 0;
+    while ((n = Read(off, tmp_buf, 4096)) > 0)
+    {
+        off += n;
+        str->append(tmp_buf, n);
+    }
+
+    return n != -1;
+}
+
+bool KittyIOFile::readToBuffer(std::vector<char> *buf)
+{
+    if (!buf)
+        return false;
+
+    buf->clear();
+
+    const ssize_t flen = Stat().st_size;
+    if (flen > 0)
+    {
+        buf->resize(flen, 0);
+        return Read(0, buf->data(), flen) == flen;
+    }
+
+    // incase stat fails to get file size
+    char tmp_buf[4096] = { 0 };
+    ssize_t n = 0, off = 0;
+    while ((n = Read(off, tmp_buf, 4096)) > 0)
+    {
+        off += n;
+        buf->insert(buf->end(), tmp_buf, tmp_buf + n);
+    }
+
+    return n != -1;
 }
 
 bool KittyIOFile::writeToFile(const std::string &filePath)
 {
-    auto buf = toBuffer();
-    if (buf.empty())
+    std::vector<char> buf;
+    if (!readToBuffer(&buf) || buf.empty())
         return false;
 
-    KittyIOFile f(filePath, O_WRONLY | O_CREAT | O_TRUNC | O_CLOEXEC, 0666);
-    return f.Open() && size_t(f.Write(0, buf.data(), buf.size())) == buf.size();
+    KittyIOFile of(filePath, O_WRONLY | O_CREAT | O_TRUNC | O_CLOEXEC, 0666);
+    return of.Open() && size_t(of.Write(0, buf.data(), buf.size())) == buf.size();
 }
 
 bool KittyIOFile::writeToFd(int fd)
@@ -79,8 +146,8 @@ bool KittyIOFile::writeToFd(int fd)
     if (fd <= 0)
         return false;
 
-    auto buf = toBuffer();
-    if (buf.empty())
+    std::vector<char> buf;
+    if (!readToBuffer(&buf) || buf.empty())
         return false;
 
     char *ptr = buf.data();
@@ -100,4 +167,22 @@ bool KittyIOFile::writeToFd(int fd)
     } while (len > 0);
 
     return true;
+}
+
+bool KittyIOFile::readFileToString(const std::string& filePath, std::string* str)
+{
+    KittyIOFile of(filePath, O_RDONLY | O_CLOEXEC);
+    return of.Open() && of.readToString(str);
+}
+
+bool KittyIOFile::readFileToBuffer(const std::string& filePath, std::vector<char>* buf)
+{
+    KittyIOFile of(filePath, O_RDONLY | O_CLOEXEC);
+    return of.Open() && of.readToBuffer(buf);
+}
+
+bool KittyIOFile::copy(const std::string &srcFilePath, const std::string &dstFilePath)
+{
+    KittyIOFile src(srcFilePath, O_RDONLY | O_CLOEXEC);
+    return src.Open() && src.writeToFile(dstFilePath);
 }
