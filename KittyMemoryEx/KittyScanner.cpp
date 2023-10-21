@@ -46,7 +46,7 @@ std::vector<uintptr_t> KittyScannerMgr::findBytesAll(const uintptr_t start, cons
     if (!_pMem || start >= end || !bytes || mask.empty())
         return local_list;
 
-    std::vector<char> buf(end - start);
+    std::vector<char> buf(end - start, 0);
     if (!_pMem->Read(start, &buf[0], buf.size()))
     {
         KITTY_LOGE("findBytesAll: failed to read into buffer.");
@@ -129,6 +129,67 @@ uintptr_t KittyScannerMgr::findHexFirst(const uintptr_t start, const uintptr_t e
     KittyUtils::dataFromHex(hex, &pattern[0]);
 
     return findBytesFirst(start, end, pattern.data(), mask);
+}
+
+std::vector<uintptr_t> KittyScannerMgr::findIdaPatternAll(const uintptr_t start, const uintptr_t end, const std::string& pattern)
+{
+    std::vector<uintptr_t> list;
+
+    if (!_pMem || start >= end)
+        return list;
+
+    std::string mask;
+    std::vector<char> bytes;
+
+    const size_t pattren_len = pattern.length();
+    for (std::size_t i = 0; i < pattren_len; i++)
+    {
+        if (pattern[i] == '?')
+        {
+            bytes.push_back(0);
+            mask += '?';
+        }
+        else if (pattren_len > i + 1 && std::isxdigit(pattern[i]) && std::isxdigit(pattern[i+1]))
+        {
+            bytes.push_back(std::stoi(pattern.substr(i++, 2), nullptr, 16));
+            mask += 'x';
+        }
+    }
+
+    if (bytes.empty() || mask.empty() || bytes.size() != mask.size())
+        return list;
+
+    list = findBytesAll(start, end, bytes.data(), mask);
+    return list;
+}
+
+uintptr_t KittyScannerMgr::findIdaPatternFirst(const uintptr_t start, const uintptr_t end, const std::string& pattern)
+{
+    if (!_pMem || start >= end)
+        return 0;
+
+    std::string mask;
+    std::vector<char> bytes;
+
+    const size_t pattren_len = pattern.length();
+    for (std::size_t i = 0; i < pattren_len; i++)
+    {
+        if (pattern[i] == '?')
+        {
+            bytes.push_back(0);
+            mask += '?';
+        }
+        else if (pattren_len > i + 1 && std::isxdigit(pattern[i]) && std::isxdigit(pattern[i+1]))
+        {
+            bytes.push_back(std::stoi(pattern.substr(i++, 2), nullptr, 16));
+            mask += 'x';
+        }
+    }
+
+    if (bytes.empty() || mask.empty() || bytes.size() != mask.size())
+        return 0;
+
+    return findBytesFirst(start, end, bytes.data(), mask);
 }
 
 std::vector<uintptr_t> KittyScannerMgr::findDataAll(const uintptr_t start, const uintptr_t end, const void *data, size_t size) const
