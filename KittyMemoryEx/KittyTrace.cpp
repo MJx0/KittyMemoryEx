@@ -119,6 +119,7 @@ bool KittyTraceMgr::setRegs(pt_regs *regs) const
 // https://github.com/evilsocket/arminject
 // https://github.com/Chainfire/injectvm-binderjack
 // https://github.com/shunix/TinyInjector
+// https://github.com/topjohnwu/Magisk/blob/master/native/src/zygisk/ptrace.cpp
 
 uintptr_t KittyTraceMgr::callFunctionFrom(uintptr_t callerAddress, uintptr_t functionAddress, int nargs, ...) const
 {
@@ -150,14 +151,14 @@ uintptr_t KittyTraceMgr::callFunctionFrom(uintptr_t callerAddress, uintptr_t fun
         return 0;
     };
 
-    KITTY_LOGD("Calling function %p with %d args.", (void *)functionAddress, nargs);
+    KITTY_LOGD("callFunction: Calling function %p with %d args.", (void *)functionAddress, nargs);
 
     va_list vl;
     va_start(vl, nargs);
 
 #if defined(__arm__) || defined(__aarch64__)
 
-    // // Fill R0-Rx with the first 4 (32-bit) or 8 (64-bit) parameters
+    // Fill R0-Rx with the first 4 (32-bit) or 8 (64-bit) parameters
     for (int i = 0; (i < nargs) && (i < REG_ARGS_NUM); i++)
         tmp_regs.uregs[i] = va_arg(vl, uintptr_t);
 
@@ -287,13 +288,32 @@ uintptr_t KittyTraceMgr::callFunctionFrom(uintptr_t callerAddress, uintptr_t fun
 
     // Catch SIGSEGV or SIGILL caused by our code
     int status = 0;
-    if (Wait(&status, WUNTRACED) != remotePID() || !WIFSTOPPED(status) ||
-        (WSTOPSIG(status) != SIGSEGV && WSTOPSIG(status) != SIGILL))
-    {
-        KITTY_LOGE("callFunction: waitpid failed [status=%x | stopped=%d | STOPSIG=%d]",
-                   status, WIFSTOPPED(status) ? 1 : 0, WSTOPSIG(status));
-        return failure_return();
-    }
+    do {
+        errno = 0;
+        pid_t wp = Wait(&status, WUNTRACED);
+        if (wp != remotePID())
+        {
+            KITTY_LOGE("callFunction: waitpid return %d. error=\"%s\".", wp, strerror(errno));
+            return failure_return();
+        }
+        
+        if (WIFSTOPPED(status) && (WSTOPSIG(status) == SIGSEGV || WSTOPSIG(status) == SIGILL))
+            break;
+
+        if (WIFEXITED(status))
+        {
+            KITTY_LOGI("callFunction: Target process exited (%d).", WEXITSTATUS(status));
+            return 0;
+        }
+
+        if (WIFSIGNALED(status))
+        {
+            KITTY_LOGI("callFunction: Target process terminated (%d).", WTERMSIG(status));
+            return 0;
+        }
+
+        if (!Cont()) return failure_return(); 
+    } while (true);
 
     // Get current registers for return value
     if (!getRegs(&return_regs))
@@ -305,6 +325,6 @@ uintptr_t KittyTraceMgr::callFunctionFrom(uintptr_t callerAddress, uintptr_t fun
     if (_autoRestoreRegs)
         setRegs(&backup_regs);
 
-    KITTY_LOGD("Calling function %p returned %p.", (void *)functionAddress, (void *)result);
+    KITTY_LOGD("callFunction: Calling function %p returned %p.", (void *)functionAddress, (void *)result);
     return result;
 }
