@@ -68,7 +68,7 @@ int main(int argc, char *args[])
 
     // initialize an ELFScanner instance using elfScanner createWithMap or createWithBase
     // ElfScanner il2cppElf = kittyMemMgr.elfScanner.createWithMap(g_il2cppBaseMap.map);
-	ElfScanner il2cppElf = g_il2cppBaseMap.elfScan;
+	ElfScanner il2cppElf = g_il2cppBaseMap.elf;
     KITTY_LOGI("il2cpp elf valid = %d", il2cppElf.isValid() ? 1 : 0);
     KITTY_LOGI("il2cpp_string_new = %p", (void *)il2cppElf.findSymbol("il2cpp_string_new"));
 
