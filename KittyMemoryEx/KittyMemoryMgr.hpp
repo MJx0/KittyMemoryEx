@@ -11,13 +11,21 @@
 
 using KittyMemoryEx::ProcMap;
 
-struct ElfBaseMap
+struct BaseElfMap
 {
     ProcMap map;
-    ElfScanner elfScan;
+    ElfScanner elf;
 
-    inline bool isValid() const { return map.isValid() && elfScan.isValid(); }
+    inline bool isValid() const { return map.isValid() && elf.isValid(); }
 };
+
+struct local_symbol_t
+{
+    const char *name = nullptr;
+    uintptr_t address = 0;
+};
+
+#define KT_LOCAL_SYMBOL(x) local_symbol_t{#x, uintptr_t(x)}
 
 class KittyMemoryMgr
 {
@@ -81,12 +89,14 @@ public:
     /**
      * Find base map of a loaded ELF with name
      */
-    ElfBaseMap getElfBaseMap(const std::string &elfName) const;
+    BaseElfMap getBaseElfMap(const std::string &elfName) const;
 
     /**
-     * Find remote address of local function / variable
+     * Find remote address of local symbol
+     * Use macro KT_LOCAL_SYMBOL
+     * Example findRemoteOfSymbol(KT_LOCAL_SYMBOL(mmap)), to find mmap address in remote process
     */
-    uintptr_t findRemoteOf(const char *symbol_name, uintptr_t local_address) const;
+    uintptr_t findRemoteOfSymbol(const local_symbol_t &local_sym) const;
 
     /**
      * Dump remote memory range

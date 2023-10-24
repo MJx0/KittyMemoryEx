@@ -69,7 +69,7 @@ bool KittyMemoryMgr::initialize(pid_t pid, EKittyMemOP eMemOp, bool initMemPatch
 
 #ifdef __ANDROID__
     // refs https://fadeevab.com/shared-library-injection-on-android-8/
-    uintptr_t defaultCaller = getElfBaseMap("libRS.so").map.startAddress;
+    uintptr_t defaultCaller = getBaseElfMap("libRS.so").map.startAddress;
 #else
     uintptr_t defaultCaller = 0;
 #endif
@@ -119,14 +119,14 @@ bool KittyMemoryMgr::isValidELF(uintptr_t elfBase) const
     return readMem(elfBase, magic, sizeof(magic)) && memcmp(magic, "\177ELF", 4) == 0;
 }
 
-ElfBaseMap KittyMemoryMgr::getElfBaseMap(const std::string &elfName) const
+BaseElfMap KittyMemoryMgr::getBaseElfMap(const std::string &elfName) const
 {
-    ElfBaseMap ret{};
+    BaseElfMap ret{};
 
     if (!isMemValid() || elfName.empty())
         return ret;
 
-    std::vector<ElfBaseMap> elfMaps;
+    std::vector<BaseElfMap> elfMaps;
 
     auto maps = KittyMemoryEx::getMapsContain(_pid, elfName);
     for (auto &it : maps)
@@ -137,9 +137,9 @@ ElfBaseMap KittyMemoryMgr::getElfBaseMap(const std::string &elfName) const
         auto elf = elfScanner.createWithMap(it);
         if (elf.isValid())
         {
-            ElfBaseMap ebp;
+            BaseElfMap ebp;
             ebp.map = it;
-            ebp.elfScan = elf;
+            ebp.elf = elf;
             elfMaps.push_back(ebp);
         }
     }
@@ -161,7 +161,7 @@ ElfBaseMap KittyMemoryMgr::getElfBaseMap(const std::string &elfName) const
     for (auto &currElf : elfMaps)
     {
         int numMaps = 0;
-        uintptr_t start = currElf.map.startAddress, end = start + currElf.elfScan.loadSize();
+        uintptr_t start = currElf.map.startAddress, end = start + currElf.elf.loadSize();
         if (start >= end)
             continue;
 
@@ -184,28 +184,29 @@ ElfBaseMap KittyMemoryMgr::getElfBaseMap(const std::string &elfName) const
     return ret;
 }
 
-uintptr_t KittyMemoryMgr::findRemoteOf(const char *symbol_name, uintptr_t local_address) const
+uintptr_t KittyMemoryMgr::findRemoteOfSymbol(const local_symbol_t &local_sym) const
 {
-    if (!isMemValid() || !symbol_name || !local_address)
+    if (!isMemValid() || !local_sym.name || !local_sym.address)
         return 0;
 
-    ElfBaseMap remoteLib{};
+    BaseElfMap r_lib{};
+    ProcMap l_lib{};
 
-    auto localLib = KittyMemoryEx::getAddressMap(getpid(), local_address);
-    if (localLib.isValid())
-        remoteLib = getElfBaseMap(localLib.pathname);
+    l_lib = KittyMemoryEx::getAddressMap(getpid(), local_sym.address);
+    if (l_lib.isValid())
+        r_lib = getBaseElfMap(l_lib.pathname);
 
-    if (!remoteLib.isValid())
+    if (!r_lib.isValid())
     {
-        KITTY_LOGE("KittyInjector: Failed to find %s, remote lib not found.", symbol_name);
+        KITTY_LOGE("KittyInjector: Failed to find %s, remote lib not found.", local_sym.name);
         return 0;
     }
     
-    uintptr_t remote_address = remoteLib.elfScan.findSymbol(symbol_name);
+    uintptr_t remote_address = r_lib.elf.findSymbol(local_sym.name);
     
     // fallback
     if (!remote_address)
-        remote_address = local_address - localLib.startAddress + remoteLib.map.startAddress;
+        remote_address = local_sym.address - l_lib.startAddress + r_lib.map.startAddress;
 
     return remote_address;
 }

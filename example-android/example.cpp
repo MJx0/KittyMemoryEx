@@ -38,13 +38,13 @@ int main(int argc, char *args[])
 
     KITTY_LOGI("================ GET ELF BASE ===============");
     
-    ElfBaseMap g_il2cppBaseMap;
+    BaseElfMap g_il2cppBaseMap;
     // loop until our target library is found
     do
     {
         sleep(1);
         // get loaded elf base map
-        g_il2cppBaseMap = kittyMemMgr.getElfBaseMap("libil2cpp.so");
+        g_il2cppBaseMap = kittyMemMgr.getBaseElfMap("libil2cpp.so");
     } while (!g_il2cppBaseMap.isValid());
     
     uintptr_t il2cppBase = g_il2cppBaseMap.map.startAddress;
@@ -198,24 +198,17 @@ int main(int argc, char *args[])
         return 1;
     }
     
-#ifdef __LP64__
-    auto libcMap = kittyMemMgr.getElfBaseMap("/lib64/libc.so");
-#else
-    auto libcMap = kittyMemMgr.getElfBaseMap("/lib/libc.so");
-#endif
-    uintptr_t remote_mmap = libcMap.elfScan.findSymbol("mmap");
-    uintptr_t remote_munmap = libcMap.elfScan.findSymbol("munmap");
+    uintptr_t remote_mmap = kittyMemMgr.findRemoteOfSymbol(KT_LOCAL_SYMBOL(mmap));
+    uintptr_t remote_munmap = kittyMemMgr.findRemoteOfSymbol(KT_LOCAL_SYMBOL(mmap));
 
-    KITTY_LOGI("libc [ base = %p | remote_mmap = %p | remote_mmap = %p ]",
-               (void *)libcMap.map.startAddress, (void *)remote_mmap, (void*)remote_munmap);
+    KITTY_LOGI("libc [ remote_mmap = %p | remote_mmap = %p ]",
+        (void*)remote_mmap, (void*)remote_munmap);
 
-    // mmap(nullptr, 0xff, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
+    // mmap(nullptr, KT_PAGE_SIZE, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
     uintptr_t mmap_ret = kittyMemMgr.trace.callFunction(remote_mmap, 6,
-                                                    nullptr, 0xff, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
-
-    // munmap(mmap_ret, 0xff);
-    uintptr_t munmap_ret = kittyMemMgr.trace.callFunction(remote_munmap, 2,
-                                                    mmap_ret, 0xff);
+                                                    nullptr, KT_PAGE_SIZE, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
+    // munmap(mmap_ret, KT_PAGE_SIZE);
+    uintptr_t munmap_ret = kittyMemMgr.trace.callFunction(remote_munmap, 2, mmap_ret, KT_PAGE_SIZE);
 
     KITTY_LOGI("Remote call [ mmap_ret=%p | munmap_ret=%p ]", (void*)mmap_ret, (void*)munmap_ret);
 

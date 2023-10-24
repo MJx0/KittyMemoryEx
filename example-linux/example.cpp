@@ -38,13 +38,13 @@ int main(int argc, char *args[])
 
     KITTY_LOGI("================ GET ELF BASE ===============");
     
-    ElfBaseMap g_libcBaseMap;
+    BaseElfMap g_libcBaseMap;
     // loop until our target library is found
     do
     {
         sleep(1);
         // get loaded elf base map
-        g_libcBaseMap = kittyMemMgr.getElfBaseMap("libc.so");
+        g_libcBaseMap = kittyMemMgr.getBaseElfMap("libc.so");
     } while (!g_libcBaseMap.isValid());
     
     uintptr_t libcBase = g_libcBaseMap.map.startAddress;
@@ -69,7 +69,7 @@ int main(int argc, char *args[])
     // initialize an ELFScanner instance using elfScanner createWithMap or createWithBase
     //ElfScanner libcElf = kittyMemMgr.elfScanner.createWithBase(libcBase);
     // ElfScanner libcElf = kittyMemMgr.elfScanner.createWithMap(g_libcBaseMap.map);
-	ElfScanner libcElf = g_libcBaseMap.elfScan;
+	ElfScanner libcElf = g_libcBaseMap.elf;
     KITTY_LOGI("libc elf valid = %d", libcElf.isValid() ? 1 : 0);
 
     uintptr_t remote_ptrace = libcElf.findSymbol("ptrace");
@@ -198,13 +198,11 @@ int main(int argc, char *args[])
     KITTY_LOGI("libc [ elf isValid=%d | remote_mmap=%p | remote_munmap=%p ]",
                libcElf.isValid() ? 1 : 0, (void *)remote_mmap, (void*)remote_munmap);
 
-    // mmap(nullptr, 0xff, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
+    // mmap(nullptr, KT_PAGE_SIZE, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
     uintptr_t mmap_ret = kittyMemMgr.trace.callFunction(remote_mmap, 6,
-                                                    nullptr, 0xff, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
-
-    // munmap(mmap_ret, 0xff);
-    uintptr_t munmap_ret = kittyMemMgr.trace.callFunction(remote_munmap, 2,
-                                                    mmap_ret, 0xff);
+                                                    nullptr, KT_PAGE_SIZE, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
+    // munmap(mmap_ret, KT_PAGE_SIZE);
+    uintptr_t munmap_ret = kittyMemMgr.trace.callFunction(remote_munmap, 2, mmap_ret, KT_PAGE_SIZE);
 
     KITTY_LOGI("Remote mmap_ret=%p | munmap_ret=%p", (void*)mmap_ret, (void*)munmap_ret);
 
