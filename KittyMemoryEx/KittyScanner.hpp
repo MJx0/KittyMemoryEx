@@ -119,13 +119,15 @@ private:
     std::vector<ElfW_(Phdr)> _phdrs;
     int _loads;
     uintptr_t _loadBias, _loadSize;
+    uintptr_t _bss;
+    size_t _bssSize;
     std::vector<ElfW_(Dyn)> _dynamics;
     uintptr_t _stringTable, _symbolTable;
     size_t _strsz, _syment;
     std::vector<std::pair<uintptr_t, std::string>> _symbols;
 
 public:
-    ElfScanner() : _pMem(nullptr), _elfBase(0), _loads(0), _loadBias(0), _loadSize(0),
+    ElfScanner() : _pMem(nullptr), _elfBase(0), _loads(0), _loadBias(0), _loadSize(0), _bss(0), _bssSize(0),
                    _stringTable(0), _symbolTable(0), _strsz(0), _syment(0) {}
     ElfScanner(IKittyMemOp *pMem, uintptr_t elfBase);
 
@@ -134,6 +136,8 @@ public:
         return _loads && !_phdrs.empty() && _loadBias && _loadSize &&
                !_dynamics.empty() && _stringTable && _symbolTable && _strsz && _syment;
     }
+
+    inline uintptr_t base() const { return _elfBase; }
 
     inline ElfW_(Ehdr) header() const { return _ehdr; }
 
@@ -144,6 +148,10 @@ public:
     inline uintptr_t loadBias() const { return _loadBias; }
 
     inline uintptr_t loadSize() const { return _loadSize; }
+
+    inline uintptr_t bss() const { return _bss; }
+    
+    inline uintptr_t bssSize() const { return _bssSize; }
 
     inline std::vector<ElfW_(Dyn)> dynamics() const { return _dynamics; }
 
@@ -157,7 +165,7 @@ public:
 
     inline std::vector<std::pair<uintptr_t, std::string>> symbols() const { return _symbols; }
 
-    // retuns the absolute address of symbol
+    // retuns the absolute address of symbol in dynstr
     uintptr_t findSymbol(const std::string &symbolName) const;
 };
 

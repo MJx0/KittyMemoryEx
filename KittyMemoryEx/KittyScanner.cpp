@@ -276,6 +276,7 @@ ElfScanner::ElfScanner(IKittyMemOp *pMem, uintptr_t elfBase)
 
     // find load bias
     uintptr_t min_vaddr = UINTPTR_MAX, max_vaddr = 0;
+    uintptr_t load_vaddr = 0, load_memsz = 0, load_filesz = 0;
     for (ElfW_(Half) i = 0; i < _ehdr.e_phnum; i++)
     {
         ElfW_(Phdr) phdr_entry = {};
@@ -285,6 +286,11 @@ ElfScanner::ElfScanner(IKittyMemOp *pMem, uintptr_t elfBase)
         if (phdr_entry.p_type == PT_LOAD)
         {
             _loads++;
+
+            load_vaddr = phdr_entry.p_vaddr;
+            load_memsz = phdr_entry.p_memsz;
+            load_filesz = phdr_entry.p_filesz;
+
             if (phdr_entry.p_vaddr < min_vaddr)
                 min_vaddr = phdr_entry.p_vaddr;
 
@@ -310,6 +316,15 @@ ElfScanner::ElfScanner(IKittyMemOp *pMem, uintptr_t elfBase)
 
     _loadBias = elfBase - min_vaddr;
     _loadSize = max_vaddr - min_vaddr;
+
+    uintptr_t seg_start = load_vaddr + _loadBias;
+    uintptr_t seg_mem_end = KT_PAGE_END((seg_start + load_memsz));
+    uintptr_t seg_file_end = KT_PAGE_END((seg_start + load_filesz));
+    if (seg_mem_end > seg_file_end)
+    {
+        _bss = seg_file_end;
+        _bssSize = size_t(seg_mem_end - seg_file_end);
+    }
 
     // read all dynamics
     for (auto &phdr : _phdrs)
@@ -390,7 +405,7 @@ ElfScanner::ElfScanner(IKittyMemOp *pMem, uintptr_t elfBase)
         if (!curr_sym.st_name || !curr_sym.st_value)
             continue;
 
-        std::string sym_str = _pMem->ReadStr(_stringTable + curr_sym.st_name, 1024);
+        std::string sym_str = _pMem->ReadStr(_stringTable + curr_sym.st_name, 512);
         if (!sym_str.empty())
             _symbols.emplace_back(get_sym_address(curr_sym), sym_str);
     }
