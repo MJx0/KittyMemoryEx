@@ -114,7 +114,7 @@ namespace KittyMemoryEx
             char perms[5] = {0}, dev[11] = {0}, pathname[256] = {0};
             // parse a line in maps file
             // (format) startAddress-endAddress perms offset dev inode pathname
-            sscanf(line, "%llx-%llx %s %llx %s %lu %s",
+            sscanf(line, "%llx-%llx %s %llx %s %lu %s", 
                    &map.startAddress, &map.endAddress,
                    perms, &map.offset, dev, &map.inode, pathname);
 
@@ -157,84 +157,79 @@ namespace KittyMemoryEx
         return retMaps;
     }
 
-    std::vector<ProcMap> getMapsEqual(pid_t pid, const std::string &name)
+    std::vector<ProcMap> getMapsEqual(const std::vector<ProcMap>& maps, const std::string& name)
     {
         std::vector<ProcMap> retMaps;
 
-        if (pid <= 0 || name.empty())
+        if (maps.empty() || name.empty())
             return retMaps;
 
-        auto maps = getAllMaps(pid);
         for (auto &it : maps)
-        {
             if (it.isValid() && !it.isUnknown() && it.pathname == name)
-            {
                 retMaps.push_back(it);
-            }
-        }
 
         return retMaps;
     }
 
-    std::vector<ProcMap> getMapsContain(pid_t pid, const std::string &name)
+    std::vector<ProcMap> getMapsEqual(pid_t pid, const std::string& name)
+    {
+        return getMapsEqual(getAllMaps(pid), name);
+    }
+
+    std::vector<ProcMap> getMapsContain(const std::vector<ProcMap>& maps, const std::string& name)
     {
         std::vector<ProcMap> retMaps;
 
-        if (pid <= 0 || name.empty())
+        if (maps.empty() || name.empty())
             return retMaps;
 
-        auto maps = getAllMaps(pid);
         for (auto &it : maps)
-        {
             if (it.isValid() && !it.isUnknown() && strstr(it.pathname.c_str(), name.c_str()))
-            {
                 retMaps.push_back(it);
-            }
-        }
 
         return retMaps;
     }
 
-    std::vector<ProcMap> getMapsEndWith(pid_t pid, const std::string &name)
+    std::vector<ProcMap> getMapsContain(pid_t pid, const std::string& name)
+    {
+        return getMapsContain(getAllMaps(pid), name);
+    }
+
+    std::vector<ProcMap> getMapsEndWith(const std::vector<ProcMap>& maps, const std::string& name)
     {
         std::vector<ProcMap> retMaps;
 
-        if (pid <= 0 || name.empty())
+        if (maps.empty() || name.empty())
             return retMaps;
 
-        auto maps = getAllMaps(pid);
-        for (auto &it : maps)
-        {
+        for (auto& it : maps)
             if (it.isValid() && !it.isUnknown() && it.pathname.length() >= name.length())
-            {
                 if (it.pathname.compare(it.pathname.length() - name.length(), name.length(), name) == 0)
-                {
                     retMaps.push_back(it);
-                }
-            }
-        }
 
         return retMaps;
+    }
+
+    std::vector<ProcMap> getMapsEndWith(pid_t pid, const std::string& name)
+    {
+        return getMapsEndWith(getAllMaps(pid), name);
+    }
+
+    ProcMap getAddressMap(const std::vector<ProcMap>& maps, uintptr_t address)
+    {
+        if (maps.empty() || !address)
+            return {};
+
+        for (auto &it : maps)
+            if (it.isValid() && address >= it.startAddress && address <= it.endAddress)
+                return it;
+
+        return {};
     }
 
     ProcMap getAddressMap(pid_t pid, uintptr_t address)
     {
-        ProcMap retMap{};
-
-        if (pid <= 0 || !address)
-            return retMap;
-
-        auto maps = getAllMaps(pid);
-        for (auto &it : maps)
-        {
-            if (it.isValid() && address >= it.startAddress && address <= it.endAddress)
-            {
-                retMap = it;
-                break;
-            }
-        }
-
-        return retMap;
+        return getAddressMap(getAllMaps(pid), address);
     }
-
+    
 } // KittyMemoryEx
