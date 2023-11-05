@@ -38,17 +38,18 @@ int main(int argc, char *args[])
 
     KITTY_LOGI("================ GET ELF BASE ===============");
     
-    BaseElfMap g_il2cppBaseMap;
+    ElfScanner g_il2cppElf{};
     // loop until our target library is found
     do
     {
         sleep(1);
-        // get loaded elf base map
-        g_il2cppBaseMap = kittyMemMgr.getBaseElfMap("libil2cpp.so");
-    } while (!g_il2cppBaseMap.isValid());
+        // get loaded elf
+        g_il2cppElf = kittyMemMgr.getMemElf("libil2cpp.so");
+    } while (!g_il2cppElf.isValid());
     
-    uintptr_t il2cppBase = g_il2cppBaseMap.map.startAddress;
+    uintptr_t il2cppBase = g_il2cppElf.base();
     KITTY_LOGI("libil2cpp.so base: %p", (void *)il2cppBase);
+
     
     KITTY_LOGI("================ MEMORY READ & WRITE ===============");
 
@@ -66,11 +67,8 @@ int main(int argc, char *args[])
 
     KITTY_LOGI("==================== SYMBOL LOOKUP ===================");
 
-    // initialize an ELFScanner instance using elfScanner createWithMap or createWithBase
-    // ElfScanner il2cppElf = kittyMemMgr.elfScanner.createWithMap(g_il2cppBaseMap.map);
-	ElfScanner il2cppElf = g_il2cppBaseMap.elf;
-    KITTY_LOGI("il2cpp elf valid = %d", il2cppElf.isValid() ? 1 : 0);
-    KITTY_LOGI("il2cpp_string_new = %p", (void *)il2cppElf.findSymbol("il2cpp_string_new"));
+    KITTY_LOGI("il2cpp elf valid = %d", g_il2cppElf.isValid() ? 1 : 0);
+    KITTY_LOGI("il2cpp_string_new = %p", (void *)g_il2cppElf.findSymbol("il2cpp_string_new"));
 
 
     KITTY_LOGI("==================== MEMORY PATCH ===================");
@@ -138,8 +136,11 @@ int main(int argc, char *args[])
     uintptr_t found_at = 0;
     std::vector<uintptr_t> found_at_list;
 
-    uintptr_t search_start = g_il2cppBaseMap.map.startAddress;
-    uintptr_t search_end = g_il2cppBaseMap.map.endAddress;
+    uintptr_t search_start = g_il2cppElf.baseSegment().startAddress;
+    uintptr_t search_end = g_il2cppElf.baseSegment().endAddress;
+
+    KITTY_LOGI("search start %p", (void*)search_start);
+    KITTY_LOGI("search end %p", (void*)search_end);
 
     // scan with direct bytes & get one result
     found_at = kittyMemMgr.memScanner.findBytesFirst(search_start, search_end, "\x33\x44\x55\x66\x00\x77\x88\x00\x99", "xxxx??x?x");
@@ -199,10 +200,9 @@ int main(int argc, char *args[])
     }
     
     uintptr_t remote_mmap = kittyMemMgr.findRemoteOfSymbol(KT_LOCAL_SYMBOL(mmap));
-    uintptr_t remote_munmap = kittyMemMgr.findRemoteOfSymbol(KT_LOCAL_SYMBOL(mmap));
+    uintptr_t remote_munmap = kittyMemMgr.findRemoteOfSymbol(KT_LOCAL_SYMBOL(munmap));
 
-    KITTY_LOGI("libc [ remote_mmap = %p | remote_mmap = %p ]",
-        (void*)remote_mmap, (void*)remote_munmap);
+    KITTY_LOGI("libc [ remote_mmap = %p | remote_munmap = %p ]", (void*)remote_mmap, (void*)remote_munmap);
 
     // mmap(nullptr, KT_PAGE_SIZE, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
     uintptr_t mmap_ret = kittyMemMgr.trace.callFunction(remote_mmap, 6,

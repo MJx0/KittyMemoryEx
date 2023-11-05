@@ -116,4 +116,8 @@ namespace KittyMemoryEx
    * Gets map info of an address in /proc/[pid]/maps
    */
   ProcMap getAddressMap(pid_t pid, uintptr_t address);
+
+  #ifdef __ANDROID__
+    std::string getAppDirectory(const std::string &pkg);
+  #endif
 }

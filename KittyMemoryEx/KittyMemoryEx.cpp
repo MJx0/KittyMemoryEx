@@ -1,4 +1,5 @@
 #include "KittyMemoryEx.hpp"
+#include "KittyIOFile.hpp"
 
 namespace KittyMemoryEx
 {
@@ -184,7 +185,7 @@ namespace KittyMemoryEx
             return retMaps;
 
         for (auto &it : maps)
-            if (it.isValid() && !it.isUnknown() && strstr(it.pathname.c_str(), name.c_str()))
+            if (it.isValid() && !it.isUnknown() && KittyUtils::string_contains(it.pathname, name))
                 retMaps.push_back(it);
 
         return retMaps;
@@ -202,10 +203,9 @@ namespace KittyMemoryEx
         if (maps.empty() || name.empty())
             return retMaps;
 
-        for (auto& it : maps)
-            if (it.isValid() && !it.isUnknown() && it.pathname.length() >= name.length())
-                if (it.pathname.compare(it.pathname.length() - name.length(), name.length(), name) == 0)
-                    retMaps.push_back(it);
+        for (auto &it : maps)
+            if (it.isValid() && !it.isUnknown() && KittyUtils::string_endswith(it.pathname, name))
+                retMaps.push_back(it);
 
         return retMaps;
     }
@@ -231,5 +231,26 @@ namespace KittyMemoryEx
     {
         return getAddressMap(getAllMaps(pid), address);
     }
-    
+
+#ifdef __ANDROID__
+    std::string getAppDirectory(const std::string &pkg)
+    {
+        std::string directory = "/data/app/", base_apk = "base.apk", ret;
+        KittyIOFile::listFilesCallback(directory, [&](const std::string& filePath)
+        {
+            if (KittyUtils::fileNameFromPath(filePath) == base_apk)
+            {
+                const std::string fileDir = KittyUtils::fileDirectory(filePath);
+                if (strstr(fileDir.c_str(), pkg.c_str()))
+                {
+                    ret = fileDir;
+                    return true;
+                }
+            }
+            return false;
+        });
+        return ret;
+    }
+#endif
+
 } // KittyMemoryEx

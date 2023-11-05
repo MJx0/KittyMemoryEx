@@ -84,8 +84,8 @@ uintptr_t KittyScannerMgr::findBytesFirst(const uintptr_t start, const uintptr_t
     if (!_pMem || start >= end || !bytes || mask.empty())
         return 0;
 
-    std::vector<char> buf(end - start);
-    if (_pMem->Read(start, &buf[0], buf.size()) != buf.size())
+    std::vector<char> buf(end - start, 0);
+    if (!_pMem->Read(start, &buf[0], buf.size()))
     {
         KITTY_LOGE("findBytesFirst: failed to read into buffer.");
         return 0;
@@ -231,6 +231,7 @@ ElfScanner::ElfScanner(IKittyMemOp *pMem, uintptr_t elfBase)
     _symbolTable = 0;
     _strsz = 0;
     _syment = 0;
+    _symbols_init = false;
 
     if (!pMem || !elfBase)
         return;
@@ -386,37 +387,63 @@ ElfScanner::ElfScanner(IKittyMemOp *pMem, uintptr_t elfBase)
         if (table_addr && table_addr < _loadBias)
             table_addr += _loadBias;
     };
-    auto get_sym_address = [&](const ElfW_(Sym) & sym_ent) -> uintptr_t
-    {
-        return sym_ent.st_value < _loadBias ? _loadBias + sym_ent.st_value : sym_ent.st_value;
-    };
 
     fix_table_address(_stringTable);
     fix_table_address(_symbolTable);
 
-    // linear search
-    uintptr_t sym_entry = _symbolTable;
-    for (; sym_entry; sym_entry += _syment)
+    auto p_maps = KittyMemoryEx::getAllMaps(_pMem->processID());
+    for (auto& it : p_maps)
     {
-        ElfW_(Sym) curr_sym{};
-        if (!_pMem->Read(sym_entry, &curr_sym, _syment) || curr_sym.st_name >= _strsz)
+        if (it.startAddress >= _elfBase && it.endAddress <= (_elfBase + _loadSize))
+            _segments.push_back(it);
+
+        if (it.endAddress > (_elfBase + _loadSize))
             break;
-
-        if (!curr_sym.st_name || !curr_sym.st_value)
-            continue;
-
-        std::string sym_str = _pMem->ReadStr(_stringTable + curr_sym.st_name, 512);
-        if (!sym_str.empty())
-            _symbols.emplace_back(get_sym_address(curr_sym), sym_str);
     }
+
+    if (!_segments.empty())
+        _base_segment = _segments.front();
 }
 
-uintptr_t ElfScanner::findSymbol(const std::string &symbolName) const
+std::vector<std::pair<uintptr_t, std::string>> ElfScanner::symbols()
 {
-    if (_symbols.empty())
-        return 0;
+    if (!_symbols_init && isValid() && _stringTable > _symbolTable)
+    {
+        _symbols_init = true;
+        auto get_sym_address = [&](const ElfW_(Sym) * sym_ent) -> uintptr_t
+        {
+            return sym_ent->st_value < _loadBias ? _loadBias + sym_ent->st_value : sym_ent->st_value;
+        };
 
-    for (auto &sym : _symbols)
+        std::vector<char> symbol_table_buff(_stringTable - _symbolTable, 0);
+        std::vector<char> string_table_buff(_strsz, 0);
+
+        if (_pMem->Read(_symbolTable, symbol_table_buff.data(), symbol_table_buff.size()) &&
+        _pMem->Read(_stringTable, string_table_buff.data(), string_table_buff.size()))
+        {
+            uintptr_t sym_entry = uintptr_t(symbol_table_buff.data());
+            for (; sym_entry; sym_entry += _syment)
+            {
+                auto curr_sym = reinterpret_cast<ElfW_(Sym)*>(sym_entry);
+                if (curr_sym->st_name >= _strsz)
+                    break;
+
+                if (!curr_sym->st_name || !curr_sym->st_value)
+                    continue;
+
+                std::string sym_str = std::string(string_table_buff.data() + curr_sym->st_name);
+                if (!sym_str.empty())
+                    _symbols.emplace_back(get_sym_address(curr_sym), sym_str);
+            }
+        }
+    }
+
+    return _symbols;
+}
+
+uintptr_t ElfScanner::findSymbol(const std::string &symbolName)
+{
+    for (auto &sym : symbols())
         if (!sym.second.empty() && sym.second == symbolName)
             return sym.first;
 

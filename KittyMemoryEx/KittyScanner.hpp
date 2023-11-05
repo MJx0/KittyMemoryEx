@@ -124,11 +124,14 @@ private:
     std::vector<ElfW_(Dyn)> _dynamics;
     uintptr_t _stringTable, _symbolTable;
     size_t _strsz, _syment;
+    bool _symbols_init;
     std::vector<std::pair<uintptr_t, std::string>> _symbols;
+    KittyMemoryEx::ProcMap _base_segment;
+    std::vector<KittyMemoryEx::ProcMap> _segments;
 
 public:
     ElfScanner() : _pMem(nullptr), _elfBase(0), _loads(0), _loadBias(0), _loadSize(0), _bss(0), _bssSize(0),
-                   _stringTable(0), _symbolTable(0), _strsz(0), _syment(0) {}
+                   _stringTable(0), _symbolTable(0), _strsz(0), _syment(0), _symbols_init(false) {}
     ElfScanner(IKittyMemOp *pMem, uintptr_t elfBase);
 
     inline bool isValid() const
@@ -138,6 +141,8 @@ public:
     }
 
     inline uintptr_t base() const { return _elfBase; }
+
+    inline uintptr_t end() const { return _elfBase + _loadSize; }
 
     inline ElfW_(Ehdr) header() const { return _ehdr; }
 
@@ -163,10 +168,16 @@ public:
 
     inline size_t symbolEntrySize() const { return _syment; }
 
-    inline std::vector<std::pair<uintptr_t, std::string>> symbols() const { return _symbols; }
+    std::vector<std::pair<uintptr_t, std::string>> symbols();
 
     // retuns the absolute address of symbol in dynstr
-    uintptr_t findSymbol(const std::string &symbolName) const;
+    uintptr_t findSymbol(const std::string &symbolName);
+
+    inline KittyMemoryEx::ProcMap baseSegment() const { return _base_segment; }
+
+    inline std::vector<KittyMemoryEx::ProcMap> segments() const { return _segments; }
+
+    inline std::string filePath() const { return _base_segment.pathname; }
 };
 
 class ElfScannerMgr

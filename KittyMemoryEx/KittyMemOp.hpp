@@ -21,7 +21,7 @@ public:
 
     virtual bool init(pid_t pid) = 0;
 
-    inline pid_t remotePID() const { return _pid; }
+    inline pid_t processID() const { return _pid; }
 
     virtual size_t Read(uintptr_t address, void *buffer, size_t len) const = 0;
     virtual size_t Write(uintptr_t address, void *buffer, size_t len) const = 0;

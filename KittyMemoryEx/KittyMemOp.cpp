@@ -123,19 +123,19 @@ size_t KittyMemSys::Read(uintptr_t address, void *buffer, size_t len) const
                 {
                 case EPERM:
                     KITTY_LOGE("Failed vm_readv(%p + %p, %p) | Can't access the address space of process ID (%d).",
-                        rvec.iov_base, (void*)(uintptr_t(rvec.iov_base) - address), (void*)rvec.iov_len, _pid);
+                        (void*)address, (void*)(uintptr_t(rvec.iov_base) - address), (void*)rvec.iov_len, _pid);
                     break;
                 case ESRCH:
                     KITTY_LOGE("Failed vm_readv(%p + %p, %p) | No process with ID (%d) exists.",
-                        rvec.iov_base, (void*)(uintptr_t(rvec.iov_base) - address), (void*)rvec.iov_len, _pid);
+                        (void*)address, (void*)(uintptr_t(rvec.iov_base) - address), (void*)rvec.iov_len, _pid);
                     break;
                 case ENOMEM:
                     KITTY_LOGE("Failed vm_readv(%p + %p, %p) | Could not allocate memory for internal copies of the iovec structures.",
-                        rvec.iov_base, (void*)(uintptr_t(rvec.iov_base) - address), (void*)rvec.iov_len);
+                        (void*)address, (void*)(uintptr_t(rvec.iov_base) - address), (void*)rvec.iov_len);
                     break;
                 default:
                     KITTY_LOGD("Failed vm_readv(%p + %p, %p) | error(%d): %s.",
-                        rvec.iov_base, (void*)(uintptr_t(rvec.iov_base) - address), (void*)rvec.iov_len, err, strerror(err));
+                        (void*)address, (void*)(uintptr_t(rvec.iov_base) - address), (void*)rvec.iov_len, err, strerror(err));
                 }
             }
             if (read_one_page)
@@ -187,19 +187,19 @@ size_t KittyMemSys::Write(uintptr_t address, void *buffer, size_t len) const
                 {
                 case EPERM:
                     KITTY_LOGE("Failed vm_writev(%p + %p, %p) | Can't access the address space of process ID (%d).",
-                        rvec.iov_base, (void*)(uintptr_t(rvec.iov_base) - address), (void*)rvec.iov_len, _pid);
+                        (void*)address, (void*)(uintptr_t(rvec.iov_base) - address), (void*)rvec.iov_len, _pid);
                     break;
                 case ESRCH:
                     KITTY_LOGE("Failed vm_writev(%p + %p, %p) | No process with ID (%d) exists.",
-                        rvec.iov_base, (void*)(uintptr_t(rvec.iov_base) - address), (void*)rvec.iov_len, _pid);
+                        (void*)address, (void*)(uintptr_t(rvec.iov_base) - address), (void*)rvec.iov_len, _pid);
                     break;
                 case ENOMEM:
                     KITTY_LOGE("Failed vm_writev(%p + %p, %p) | Could not allocate memory for internal copies of the iovec structures.",
-                        rvec.iov_base, (void*)(uintptr_t(rvec.iov_base) - address), (void*)rvec.iov_len);
+                        (void*)address, (void*)(uintptr_t(rvec.iov_base) - address), (void*)rvec.iov_len);
                     break;
                 default:
                     KITTY_LOGD("Failed vm_writev(%p + %p, %p) | error(%d): %s.",
-                        rvec.iov_base, (void*)(uintptr_t(rvec.iov_base) - address), (void*)rvec.iov_len, err, strerror(err));
+                        (void*)address, (void*)(uintptr_t(rvec.iov_base) - address), (void*)rvec.iov_len, err, strerror(err));
                 }
             }
             if (write_one_page)

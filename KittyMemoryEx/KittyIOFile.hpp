@@ -69,4 +69,6 @@ public:
     static bool readFileToBuffer(const std::string &filePath, std::vector<char> *buf);
 
     static bool copy(const std::string &srcFilePath, const std::string &dstFilePath);
+
+    static void listFilesCallback(const std::string& dir, std::function<void(const std::string&)> cb);
 };

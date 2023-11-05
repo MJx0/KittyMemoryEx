@@ -1,4 +1,5 @@
 #include "KittyMemoryMgr.hpp"
+#include "zip/zip.h"
 
 bool KittyMemoryMgr::initialize(pid_t pid, EKittyMemOP eMemOp, bool initMemPatch)
 {
@@ -69,7 +70,7 @@ bool KittyMemoryMgr::initialize(pid_t pid, EKittyMemOP eMemOp, bool initMemPatch
 
 #ifdef __ANDROID__
     // refs https://fadeevab.com/shared-library-injection-on-android-8/
-    uintptr_t defaultCaller = getBaseElfMap("libRS.so").map.startAddress;
+    uintptr_t defaultCaller = getMemElf("libRS.so").base();
 #else
     uintptr_t defaultCaller = 0;
 #endif
@@ -119,14 +120,17 @@ bool KittyMemoryMgr::isValidELF(uintptr_t elfBase) const
     return readMem(elfBase, magic, sizeof(magic)) && memcmp(magic, "\177ELF", 4) == 0;
 }
 
-BaseElfMap KittyMemoryMgr::getBaseElfMap(const std::string &elfName) const
+ElfScanner KittyMemoryMgr::getMemElf(const std::string &elfName) const
 {
-    BaseElfMap ret{};
+    ElfScanner ret{};
 
     if (!isMemValid() || elfName.empty())
         return ret;
 
-    std::vector<BaseElfMap> elfMaps;
+    // sometimes an ELF has two loads
+    // the one we should use is the one with more segments than other
+
+    std::vector<ElfScanner> elfs;
 
     auto maps = KittyMemoryEx::getMapsContain(_pid, elfName);
     for (auto &it : maps)
@@ -137,50 +141,78 @@ BaseElfMap KittyMemoryMgr::getBaseElfMap(const std::string &elfName) const
         auto elf = elfScanner.createWithMap(it);
         if (elf.isValid())
         {
-            BaseElfMap ebp;
-            ebp.map = it;
-            ebp.elf = elf;
-            elfMaps.push_back(ebp);
+            ElfScanner ef{};
+            ef = elf;
+            elfs.push_back(ef);
         }
     }
 
-    if (elfMaps.empty())
+    if (elfs.empty())
         return ret;
 
-    ret = elfMaps.front();
+    ret = elfs.front();
 
-    if (elfMaps.size() == 1)
+    if (elfs.size() == 1)
         return ret;
 
-    // check which elf has most maps
-    // ghetto solution but it works
-
-    int nMostMaps = 0;
-
-    auto allMaps = KittyMemoryEx::getAllMaps(_pid);
-    for (auto &currElf : elfMaps)
+    int nMostSegments = 0;
+    for (auto &it : elfs)
     {
-        int numMaps = 0;
-        uintptr_t start = currElf.map.startAddress, end = start + currElf.elf.loadSize();
-        if (start >= end)
-            continue;
-
-        for (auto &currMap : allMaps)
+        int numSegments = it.segments().size();
+        if (numSegments > nMostSegments)
         {
-            if (currMap.startAddress >= start && currMap.endAddress <= end)
-                numMaps++;
-
-            if (currMap.endAddress > end)
-                break;
-        }
-
-        if (numMaps > nMostMaps)
-        {
-            ret = currElf;
-            nMostMaps = numMaps;
+            ret = it;
+            nMostSegments = numSegments;
         }
     }
 
+    return ret;
+}
+
+ElfScanner KittyMemoryMgr::getMemElfInZip(const std::string& zip, const std::string& elfName)
+{
+    // Comparing ELF data offset in zip to the mapped memory offset
+
+    ElfScanner ret{};
+
+    if (!isMemValid() || elfName.empty())
+        return ret;
+
+    auto maps = KittyMemoryEx::getMapsEndWith(_pid, zip);
+    if (maps.empty())
+        return ret;
+
+    auto map = maps.front();
+
+    struct zip_t* z = zip_open(map.pathname.c_str(), 0, 'r');
+    if (!z)
+        return ret;
+
+    int i, n = zip_entries_total(z);
+    for (i = 0; i < n; ++i)
+    {
+        zip_entry_openbyindex(z, i);
+        {
+            std::string name = zip_entry_name(z);
+            if (!KittyUtils::string_endswith(name, elfName))
+                continue;
+
+            unsigned long long data_offset = zip_entry_data_offset(z);
+            for (auto& it : maps)
+            {
+                if (it.inode == map.inode && it.offset == data_offset)
+                {
+                    ret = elfScanner.createWithMap(it);
+                    goto end;
+                }
+            }
+            break;
+        }
+        zip_entry_close(z);
+    }
+    zip_close(z);
+
+    end:
     return ret;
 }
 
@@ -189,12 +221,12 @@ uintptr_t KittyMemoryMgr::findRemoteOfSymbol(const local_symbol_t &local_sym) co
     if (!isMemValid() || !local_sym.name || !local_sym.address)
         return 0;
 
-    BaseElfMap r_lib{};
+    ElfScanner r_lib{};
     ProcMap l_lib{};
 
     l_lib = KittyMemoryEx::getAddressMap(getpid(), local_sym.address);
     if (l_lib.isValid())
-        r_lib = getBaseElfMap(l_lib.pathname);
+        r_lib = getMemElf(l_lib.pathname);
 
     if (!r_lib.isValid())
     {
@@ -202,11 +234,11 @@ uintptr_t KittyMemoryMgr::findRemoteOfSymbol(const local_symbol_t &local_sym) co
         return 0;
     }
     
-    uintptr_t remote_address = r_lib.elf.findSymbol(local_sym.name);
+    uintptr_t remote_address = r_lib.findSymbol(local_sym.name);
     
     // fallback
     if (!remote_address)
-        remote_address = local_sym.address - l_lib.startAddress + r_lib.map.startAddress;
+        remote_address = local_sym.address - l_lib.startAddress + r_lib.base();
 
     return remote_address;
 }
@@ -222,12 +254,10 @@ bool KittyMemoryMgr::dumpMemRange(uintptr_t start, uintptr_t end, const std::str
         return false;
     }
 
-    char memPath[256] = {0};
-    snprintf(memPath, sizeof(memPath), "/proc/%d/mem", _pid);
-    KittyIOFile srcFile(memPath, O_RDONLY);
+    KittyIOFile srcFile(KittyUtils::strfmt("/proc/%d/mem", _pid), O_RDONLY);
     if (!srcFile.Open())
     {
-        KITTY_LOGE("dumpMemRange: Couldn't open mem file %s, error=%s", memPath, srcFile.lastStrError().c_str());
+        KITTY_LOGE("dumpMemRange: Couldn't open mem file %s, error=%s", srcFile.Path().c_str(), srcFile.lastStrError().c_str());
         return false;
     }
 
@@ -316,5 +346,5 @@ bool KittyMemoryMgr::dumpMemELF(uintptr_t elfBase, const std::string &destinatio
         return false;
 
     ElfScanner elf = elfScanner.createWithBase(elfBase);
-    return elf.isValid() && dumpMemRange(elfBase, elfBase + elf.loadSize(), destination);
+    return elf.isValid() && dumpMemRange(elfBase, elf.end(), destination);
 }

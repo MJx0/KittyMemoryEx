@@ -186,3 +186,22 @@ bool KittyIOFile::copy(const std::string &srcFilePath, const std::string &dstFil
     KittyIOFile src(srcFilePath, O_RDONLY | O_CLOEXEC);
     return src.Open() && src.writeToFile(dstFilePath);
 }
+
+void KittyIOFile::listFilesCallback(const std::string& dirPath, std::function<void(const std::string&)> cb)
+{
+    if (auto dir = opendir(dirPath.c_str()))
+    {
+        while (auto f = readdir(dir))
+        {
+            if (f->d_name[0] == '.')
+                continue;
+
+            if (f->d_type == DT_DIR)
+                listFilesCallback(dirPath + f->d_name + "/", cb);
+
+            if (f->d_type == DT_REG)
+                cb(dirPath + f->d_name);
+        }
+        closedir(dir);
+    }
+}

@@ -60,7 +60,7 @@ public:
     KittyTraceMgr(IKittyMemOp *pMemOp, uintptr_t defaultCaller = 0, bool autoRestoreRegs = true)
         : _pMemOp(pMemOp), _defaultCaller(defaultCaller), _autoRestoreRegs(autoRestoreRegs) {}
 
-    inline pid_t remotePID() const { return _pMemOp ? _pMemOp->remotePID() : 0; }
+    inline pid_t remotePID() const { return _pMemOp ? _pMemOp->processID() : 0; }
 
     inline bool isAttached() const
     {
@@ -87,7 +87,7 @@ public:
      */
     inline pid_t Wait(int *status, int options) const
     {
-        return _pMemOp->remotePID() > 0 ? waitpid(remotePID(), status, options) : 0;
+        return _pMemOp->processID() > 0 ? waitpid(remotePID(), status, options) : 0;
     }
 
     /**
