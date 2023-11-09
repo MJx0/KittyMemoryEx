@@ -391,11 +391,22 @@ ElfScanner::ElfScanner(IKittyMemOp *pMem, uintptr_t elfBase)
     fix_table_address(_stringTable);
     fix_table_address(_symbolTable);
 
+    bool fixBSS = !_bss;
+
     auto p_maps = KittyMemoryEx::getAllMaps(_pMem->processID());
     for (auto& it : p_maps)
     {
         if (it.startAddress >= _elfBase && it.endAddress <= (_elfBase + _loadSize))
+        {
             _segments.push_back(it);
+            if (fixBSS && it.pathname == "[anon:.bss]")
+            {
+                if (!_bss)
+                    _bss = it.startAddress;
+
+                _bssSize = it.endAddress - _bss;
+            }
+        }
 
         if (it.endAddress > (_elfBase + _loadSize))
             break;
