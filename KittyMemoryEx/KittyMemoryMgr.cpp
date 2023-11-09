@@ -140,11 +140,7 @@ ElfScanner KittyMemoryMgr::getMemElf(const std::string &elfName) const
 
         auto elf = elfScanner.createWithMap(it);
         if (elf.isValid())
-        {
-            ElfScanner ef{};
-            ef = elf;
-            elfs.push_back(ef);
-        }
+            elfs.push_back(elf);
     }
 
     if (elfs.empty())
