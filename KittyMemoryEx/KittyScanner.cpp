@@ -144,6 +144,8 @@ std::vector<uintptr_t> KittyScannerMgr::findIdaPatternAll(const uintptr_t start,
     const size_t pattren_len = pattern.length();
     for (std::size_t i = 0; i < pattren_len; i++)
     {
+        if (pattern[i] == ' ') continue;
+		
         if (pattern[i] == '?')
         {
             bytes.push_back(0);
@@ -174,6 +176,8 @@ uintptr_t KittyScannerMgr::findIdaPatternFirst(const uintptr_t start, const uint
     const size_t pattren_len = pattern.length();
     for (std::size_t i = 0; i < pattren_len; i++)
     {
+        if (pattern[i] == ' ') continue;
+		
         if (pattern[i] == '?')
         {
             bytes.push_back(0);
