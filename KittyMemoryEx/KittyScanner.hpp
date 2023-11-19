@@ -116,11 +116,13 @@ private:
     IKittyMemOp *_pMem;
     uintptr_t _elfBase;
     ElfW_(Ehdr) _ehdr;
+    uintptr_t _phdr;
     std::vector<ElfW_(Phdr)> _phdrs;
     int _loads;
     uintptr_t _loadBias, _loadSize;
     uintptr_t _bss;
     size_t _bssSize;
+    uintptr_t _dynamic;
     std::vector<ElfW_(Dyn)> _dynamics;
     uintptr_t _stringTable, _symbolTable;
     size_t _strsz, _syment;
@@ -130,8 +132,8 @@ private:
     std::vector<KittyMemoryEx::ProcMap> _segments;
 
 public:
-    ElfScanner() : _pMem(nullptr), _elfBase(0), _loads(0), _loadBias(0), _loadSize(0), _bss(0), _bssSize(0),
-                   _stringTable(0), _symbolTable(0), _strsz(0), _syment(0), _symbols_init(false) {}
+    ElfScanner() : _pMem(nullptr), _elfBase(0), _phdr(0), _loads(0), _loadBias(0), _loadSize(0), _bss(0), _bssSize(0),
+                   _dynamic(0), _stringTable(0), _symbolTable(0), _strsz(0), _syment(0), _symbols_init(false) {}
     ElfScanner(IKittyMemOp *pMem, uintptr_t elfBase);
 
     inline bool isValid() const
@@ -146,6 +148,8 @@ public:
 
     inline ElfW_(Ehdr) header() const { return _ehdr; }
 
+    inline uintptr_t phdr() const { return _phdr; }
+
     inline std::vector<ElfW_(Phdr)> programHeaders() const { return _phdrs; }
 
     inline int loads() const { return _loads; }
@@ -156,7 +160,9 @@ public:
 
     inline uintptr_t bss() const { return _bss; }
     
-    inline uintptr_t bssSize() const { return _bssSize; }
+    inline size_t bssSize() const { return _bssSize; }
+
+    inline uintptr_t dynamic() const { return _dynamic; }
 
     inline std::vector<ElfW_(Dyn)> dynamics() const { return _dynamics; }
 

@@ -228,9 +228,13 @@ ElfScanner::ElfScanner(IKittyMemOp *pMem, uintptr_t elfBase)
     _pMem = nullptr;
     _elfBase = 0;
     _ehdr = {};
+    _phdr = 0;
     _loads = 0;
     _loadBias = 0;
     _loadSize = 0;
+    _bss = 0;
+    _bssSize = 0;
+    _dynamic = 0;
     _stringTable = 0;
     _symbolTable = 0;
     _strsz = 0;
@@ -271,9 +275,11 @@ ElfScanner::ElfScanner(IKittyMemOp *pMem, uintptr_t elfBase)
         return;
     }
 
+    _phdr = elfBase + _ehdr.e_phoff;
+    
     // read all program headers
     std::vector<char> phdrs_buf(_ehdr.e_phnum * _ehdr.e_phentsize);
-    if (!_pMem->Read(elfBase + _ehdr.e_phoff, &phdrs_buf[0], phdrs_buf.size()))
+    if (!_pMem->Read(_phdr, &phdrs_buf[0], phdrs_buf.size()))
     {
         KITTY_LOGD("ElfScanner: failed to read ELF (%p) program headers.", (void *)elfBase);
         return;
@@ -336,9 +342,9 @@ ElfScanner::ElfScanner(IKittyMemOp *pMem, uintptr_t elfBase)
     {
         if (phdr.p_type == PT_DYNAMIC)
         {
-            uintptr_t dyn_addr = _loadBias + phdr.p_vaddr;
+            _dynamic = _loadBias + phdr.p_vaddr;
             std::vector<ElfW_(Dyn)> dyn_buff(phdr.p_memsz / sizeof(ElfW_(Dyn)));
-            if (!_pMem->Read(dyn_addr, &dyn_buff[0], phdr.p_memsz))
+            if (!_pMem->Read(_dynamic, &dyn_buff[0], phdr.p_memsz))
             {
                 KITTY_LOGD("ElfScanner: failed to read dynamic for ELF (%p).", (void *)elfBase);
                 break;
@@ -436,17 +442,23 @@ std::vector<std::pair<uintptr_t, std::string>> ElfScanner::symbols()
         if (_pMem->Read(_symbolTable, symbol_table_buff.data(), symbol_table_buff.size()) &&
         _pMem->Read(_stringTable, string_table_buff.data(), string_table_buff.size()))
         {
-            uintptr_t sym_entry = uintptr_t(symbol_table_buff.data());
-            for (; sym_entry; sym_entry += _syment)
+            uintptr_t sym_start = uintptr_t(symbol_table_buff.data());
+            uintptr_t sym_end = uintptr_t(symbol_table_buff.data()+symbol_table_buff.size());
+            uintptr_t sym_str_end = uintptr_t(string_table_buff.data()+string_table_buff.size());
+            for (auto sym_entry = sym_start; (sym_entry+_syment) < sym_end; sym_entry += _syment)
             {
                 auto curr_sym = reinterpret_cast<ElfW_(Sym)*>(sym_entry);
                 if (curr_sym->st_name >= _strsz)
                     break;
 
-                if (!curr_sym->st_name || !curr_sym->st_value)
+                if (intptr_t(curr_sym->st_name) <= 0 || intptr_t(curr_sym->st_value) <= 0)
                     continue;
 
-                std::string sym_str = std::string(string_table_buff.data() + curr_sym->st_name);
+                uintptr_t sym_str_addr = uintptr_t(string_table_buff.data() + curr_sym->st_name);
+                if (!sym_str_addr || sym_str_addr >= sym_str_end)
+                    continue;
+
+                std::string sym_str = std::string(reinterpret_cast<const char*>(sym_str_addr));
                 if (!sym_str.empty())
                     _symbols.emplace_back(get_sym_address(curr_sym), sym_str);
             }
@@ -458,7 +470,7 @@ std::vector<std::pair<uintptr_t, std::string>> ElfScanner::symbols()
 
 uintptr_t ElfScanner::findSymbol(const std::string &symbolName)
 {
-    for (auto &sym : symbols())
+    for (const auto &sym : symbols())
         if (!sym.second.empty() && sym.second == symbolName)
             return sym.first;
 
