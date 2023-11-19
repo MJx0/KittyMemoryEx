@@ -3,6 +3,40 @@
 namespace KittyUtils
 {
 
+#ifdef __ANDROID__
+    std::string getExternalStorage()
+    {
+        char *storage = getenv("EXTERNAL_STORAGE");
+        return storage ? storage : "/sdcard";
+    }
+
+    int getAndroidVersion()
+    {
+        static int ver = 0;
+        if (ver > 0)
+            return ver;
+
+        char buf[0xff] = { 0 };
+        if (__system_property_get("ro.build.version.release", buf))
+            ver = std::atoi(buf);
+
+        return ver;
+    }
+
+    int getAndroidSDK()
+    {
+        static int sdk = 0;
+        if (sdk > 0)
+            return sdk;
+
+        char buf[0xff] = { 0 };
+        if (__system_property_get("ro.build.version.sdk", buf))
+            sdk = std::atoi(buf);
+
+        return sdk;
+    }
+#endif
+
     std::string fileNameFromPath(const std::string &filePath)
     {
         std::string filename;

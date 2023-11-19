@@ -88,11 +88,9 @@ namespace KittyUtils
 {
 
 #ifdef __ANDROID__
-    static inline std::string getExternalStorage()
-    {
-        char *storage = getenv("EXTERNAL_STORAGE");
-        return storage ? storage : "/sdcard";
-    }
+    std::string getExternalStorage();
+    int getAndroidVersion();
+    int getAndroidSDK();
 #endif
 
     std::string fileNameFromPath(const std::string &filePath);
