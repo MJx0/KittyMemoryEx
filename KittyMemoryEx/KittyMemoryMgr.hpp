@@ -89,7 +89,12 @@ public:
     /**
      * Find in-memory loaded ELF with name in zip
      */
-    ElfScanner getMemElfInZip(const std::string &zip, const std::string &elfName);
+    ElfScanner getMemElfInZip(const std::string &zip, const std::string &elfName) const;
+
+    /**
+     * /proc/[pid]/exe
+     */
+    ElfScanner getMemElfExe() const;
 
     /**
      * Find remote address of local symbol.

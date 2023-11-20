@@ -165,7 +165,7 @@ ElfScanner KittyMemoryMgr::getMemElf(const std::string &elfName) const
     return ret;
 }
 
-ElfScanner KittyMemoryMgr::getMemElfInZip(const std::string& zip, const std::string& elfName)
+ElfScanner KittyMemoryMgr::getMemElfInZip(const std::string& zip, const std::string& elfName) const
 {
     // Comparing ELF data offset in zip to the mapped memory offset
 
@@ -210,6 +210,23 @@ ElfScanner KittyMemoryMgr::getMemElfInZip(const std::string& zip, const std::str
 
     end:
     return ret;
+}
+
+ElfScanner KittyMemoryMgr::getMemElfExe() const
+{
+    if (!isMemValid())
+        return {};
+
+    std::string path = KittyUtils::strfmt("/proc/%d/exe", _pid);
+    char exePath[0xff] = {0};
+    int ret = int(readlink(path.c_str(), exePath, 0xff));
+    if (ret == -1)
+    {
+        int err = errno;
+        KITTY_LOGE("Failed to readlink \"%s\", error(%d): %s.", path.c_str(), err, strerror(err));
+        return {};
+    }
+    return getMemElf(exePath);
 }
 
 uintptr_t KittyMemoryMgr::findRemoteOfSymbol(const local_symbol_t &local_sym) const
