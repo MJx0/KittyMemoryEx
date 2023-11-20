@@ -146,6 +146,7 @@ uintptr_t KittyTraceMgr::callFunctionFrom(uintptr_t callerAddress, uintptr_t fun
     // cleanup failure return
     auto failure_return = [&]() -> uintptr_t
     {
+        KITTY_LOGE("callFunction: Failed to call function %p with %d args.", (void *)functionAddress, nargs);
         if (_autoRestoreRegs)
             setRegs(&backup_regs);
         return 0;
@@ -302,13 +303,13 @@ uintptr_t KittyTraceMgr::callFunctionFrom(uintptr_t callerAddress, uintptr_t fun
 
         if (WIFEXITED(status))
         {
-            KITTY_LOGI("callFunction: Target process exited (%d).", WEXITSTATUS(status));
+            KITTY_LOGE("callFunction: Target process exited (%d).", WEXITSTATUS(status));
             return 0;
         }
 
         if (WIFSIGNALED(status))
         {
-            KITTY_LOGI("callFunction: Target process terminated (%d).", WTERMSIG(status));
+            KITTY_LOGE("callFunction: Target process terminated (%d).", WTERMSIG(status));
             return 0;
         }
 
