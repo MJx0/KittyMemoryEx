@@ -17,7 +17,6 @@
 
 #if defined(__aarch64__) || defined(__arm__)
 #define CPSR_T_MASK (1u << 5)
-#define REGS_RETURN_VALUE(regs) regs.r0
 #endif
 
 #if defined(__i386__) || defined(__x86_64__) || defined(__aarch64__)
@@ -25,27 +24,32 @@
 #endif
 
 #if defined(__aarch64__)
-#define REG_ARGS_NUM 8
-
+#define kREG_ARGS_NUM 8
 #define uregs regs
 #define r0 regs[0]
 #define lr regs[30]
 #define cpsr pstate
 
 #elif defined(__arm__)
-#define REG_ARGS_NUM 4
-
+#define kREG_ARGS_NUM 4
 #define sp ARM_sp
 #define pc ARM_pc
 #define r0 ARM_r0
 #define lr ARM_lr
 #define cpsr ARM_cpsr
+#endif
 
-#elif defined(__i386__)
-#define REGS_RETURN_VALUE(regs) regs.eax
+#if defined(__i386__)
+#define kREGS_RET(regs) regs.eax
+#define kREGS_PC(regs) regs.eip
 
 #elif defined(__x86_64__)
-#define REGS_RETURN_VALUE(regs) regs.rax
+#define kREGS_RET(regs) regs.rax
+#define kREGS_PC(regs) regs.rip
+
+#elif defined(__aarch64__) || defined(__arm__)
+#define kREGS_RET(regs) regs.r0
+#define kREGS_PC(regs) regs.pc
 #endif
 
 class KittyTraceMgr
@@ -100,10 +104,23 @@ public:
      */
     bool setRegs(pt_regs *regs) const;
 
-    inline bool autoRestoreRegs() const { return _autoRestoreRegs; }
+    /**
+     * Default caller to use in callFunction
+     */
+    inline uintptr_t defaultCaller() const { return _defaultCaller; }
+
+    /**
+     * Set a default caller to use in callFunction
+     */
+    inline void setdefaultCaller(uintptr_t caller) { _defaultCaller = caller; }
 
     /**
      * Automatically back up and restore regs after a remote function call
+     */
+    inline bool autoRestoreRegs() const { return _autoRestoreRegs; }
+
+    /**
+     * Set to automatically back up and restore regs after a remote function call
      */
     inline void setAutoRestoreRegs(bool flag) { _autoRestoreRegs = flag; }
 
