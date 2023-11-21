@@ -160,15 +160,15 @@ uintptr_t KittyTraceMgr::callFunctionFrom(uintptr_t callerAddress, uintptr_t fun
 #if defined(__arm__) || defined(__aarch64__)
 
     // Fill R0-Rx with the first 4 (32-bit) or 8 (64-bit) parameters
-    for (int i = 0; (i < nargs) && (i < REG_ARGS_NUM); i++)
+    for (int i = 0; (i < nargs) && (i < kREG_ARGS_NUM); i++)
         tmp_regs.uregs[i] = va_arg(vl, uintptr_t);
 
     // push remaining parameters onto stack
-    if (nargs > REG_ARGS_NUM)
+    if (nargs > kREG_ARGS_NUM)
     {
-        tmp_regs.sp -= sizeof(uintptr_t) * (nargs - REG_ARGS_NUM);
+        tmp_regs.sp -= sizeof(uintptr_t) * (nargs - kREG_ARGS_NUM);
         uintptr_t stack = tmp_regs.sp;
-        for (int i = REG_ARGS_NUM; i < nargs; ++i)
+        for (int i = kREG_ARGS_NUM; i < nargs; ++i)
         {
             uintptr_t arg = va_arg(vl, uintptr_t);
             if (!_pMemOp->Write(stack, &arg, sizeof(uintptr_t)))
@@ -320,7 +320,7 @@ uintptr_t KittyTraceMgr::callFunctionFrom(uintptr_t callerAddress, uintptr_t fun
     if (!getRegs(&return_regs))
         return failure_return();
 
-    uintptr_t result = REGS_RETURN_VALUE(return_regs);
+    uintptr_t result = kREGS_RET(return_regs);
 
     // Restore regs
     if (_autoRestoreRegs)
