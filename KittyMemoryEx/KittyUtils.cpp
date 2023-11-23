@@ -64,7 +64,7 @@ namespace KittyUtils
         return ext;
     }
 
-    void trim_string(std::string &str)
+    void String::Trim(std::string &str)
     {
         // https://www.techiedelight.com/remove-whitespaces-string-cpp/
         str.erase(std::remove_if(str.begin(), str.end(), [](char c)
@@ -73,7 +73,7 @@ namespace KittyUtils
                   str.end());
     }
 
-    bool validateHexString(std::string &hex)
+    bool String::ValidateHex(std::string &hex)
     {
         if (hex.empty())
             return false;
@@ -81,7 +81,7 @@ namespace KittyUtils
         if (hex.compare(0, 2, "0x") == 0)
             hex.erase(0, 2);
 
-        trim_string(hex); // first remove spaces
+        Trim(hex); // first remove spaces
 
         if (hex.length() < 2 || hex.length() % 2 != 0)
             return false;
@@ -95,7 +95,7 @@ namespace KittyUtils
         return true;
     }
 
-    std::string random_string(size_t length)
+    std::string String::Random(size_t length)
     {
         static const std::string chars = "0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz";
         
@@ -109,7 +109,7 @@ namespace KittyUtils
         return str;
     }
 
-    std::string strfmt(const char *fmt, ...)
+    std::string String::Fmt(const char *fmt, ...)
     {
         if (!fmt)
             return "";

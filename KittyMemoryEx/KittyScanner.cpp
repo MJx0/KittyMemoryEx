@@ -102,7 +102,7 @@ std::vector<uintptr_t> KittyScannerMgr::findHexAll(const uintptr_t start, const 
 {
     std::vector<uintptr_t> list;
 
-    if (!_pMem || start >= end || mask.empty() || !KittyUtils::validateHexString(hex))
+    if (!_pMem || start >= end || mask.empty() || !KittyUtils::String::ValidateHex(hex))
         return list;
 
     const size_t scan_size = mask.length();
@@ -118,7 +118,7 @@ std::vector<uintptr_t> KittyScannerMgr::findHexAll(const uintptr_t start, const 
 
 uintptr_t KittyScannerMgr::findHexFirst(const uintptr_t start, const uintptr_t end, std::string hex, const std::string &mask) const
 {
-    if (!_pMem || start >= end || mask.empty() || !KittyUtils::validateHexString(hex))
+    if (!_pMem || start >= end || mask.empty() || !KittyUtils::String::ValidateHex(hex))
         return 0;
 
     const size_t scan_size = mask.length();

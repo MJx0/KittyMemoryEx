@@ -190,7 +190,7 @@ ElfScanner KittyMemoryMgr::getMemElfInZip(const std::string& zip, const std::str
         zip_entry_openbyindex(z, i);
         {
             std::string name = zip_entry_name(z);
-            if (!KittyUtils::string_endswith(name, elfName))
+            if (!KittyUtils::String::EndsWith(name, elfName))
                 continue;
 
             unsigned long long data_offset = zip_entry_data_offset(z);
@@ -217,7 +217,7 @@ ElfScanner KittyMemoryMgr::getMemElfExe() const
     if (!isMemValid())
         return {};
 
-    std::string path = KittyUtils::strfmt("/proc/%d/exe", _pid);
+    std::string path = KittyUtils::String::Fmt("/proc/%d/exe", _pid);
     char exePath[0xff] = {0};
     int ret = int(readlink(path.c_str(), exePath, 0xff));
     if (ret == -1)
@@ -267,7 +267,7 @@ bool KittyMemoryMgr::dumpMemRange(uintptr_t start, uintptr_t end, const std::str
         return false;
     }
 
-    KittyIOFile srcFile(KittyUtils::strfmt("/proc/%d/mem", _pid), O_RDONLY);
+    KittyIOFile srcFile(KittyUtils::String::Fmt("/proc/%d/mem", _pid), O_RDONLY);
     if (!srcFile.Open())
     {
         KITTY_LOGE("dumpMemRange: Couldn't open mem file %s, error=%s", srcFile.Path().c_str(), srcFile.lastStrError().c_str());

@@ -46,12 +46,10 @@ namespace KittyMemoryEx
 
     inline bool isValid() const { return (pid && startAddress && endAddress && length); }
     inline bool isUnknown() const { return pathname.empty(); }
-    
-    inline bool contains(uintptr_t address) const { return address >= startAddress && address <= endAddress; }
-
+    inline bool contains(uintptr_t address) const { return address >= startAddress && address < endAddress; }
     inline std::string toString()
     {
-        return KittyUtils::strfmt("%llx-%llx %c%c%c%c %llx %s %lu %s",
+        return KittyUtils::String::Fmt("%llx-%llx %c%c%c%c %llx %s %lu %s",
             startAddress, endAddress,
             readable ? 'r' : '-', writeable ? 'w' : '-', executable ? 'x' : '-', is_private ? 'p' : 's',
             offset, dev.c_str(), inode, pathname.c_str());

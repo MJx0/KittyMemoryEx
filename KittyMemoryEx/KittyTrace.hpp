@@ -112,7 +112,7 @@ public:
     /**
      * Set a default caller to use in callFunction
      */
-    inline void setdefaultCaller(uintptr_t caller) { _defaultCaller = caller; }
+    inline void setDefaultCaller(uintptr_t caller) { _defaultCaller = caller; }
 
     /**
      * Automatically back up and restore regs after a remote function call

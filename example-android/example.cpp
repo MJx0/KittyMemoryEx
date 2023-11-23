@@ -91,7 +91,7 @@ int main(int argc, char *args[])
     get_canShoot = kittyMemMgr.memPatch.createWithAsm(il2cppBase + 0x10948D4, MP_ASM_ARM64, "mov x0, #1; ret");
 
     // format asm
-    auto asm_fmt = KittyUtils::strfmt("mov x0, #%d; ret", 65536);
+    auto asm_fmt = KittyUtils::String::Fmt("mov x0, #%d; ret", 65536);
     get_gold = kittyMemMgr.memPatch.createWithAsm(il2cppBase + 0x10948D4, MP_ASM_ARM64, asm_fmt);
 
     KITTY_LOGI("Patch Address: %p", (void *)get_canShoot.get_TargetAddress());

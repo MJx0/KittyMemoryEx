@@ -88,7 +88,7 @@ int main(int argc, char *args[])
     //ptrace_patch = kittyMemMgr.memPatch.createWithAsm(remote_ptrace, MP_ASM_ARM64, "mov rax, 0; ret");
 
     // format asm
-    //auto asm_fmt = KittyUtils::strfmt("mov x0, %d; ret", 0);
+    //auto asm_fmt = KittyUtils::String::Fmt("mov x0, %d; ret", 0);
     //ptrace_patch = kittyMemMgr.memPatch.createWithAsm(remote_ptrace, MP_ASM_ARM64, asm_fmt);
 
     KITTY_LOGI("Patch Address: %p", (void *)ptrace_patch.get_TargetAddress());

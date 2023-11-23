@@ -8,6 +8,7 @@
 #include "MemoryBackup.hpp"
 #include "KittyScanner.hpp"
 #include "KittyTrace.hpp"
+#include "KittyArm64.hpp"
 
 using KittyMemoryEx::ProcMap;
 

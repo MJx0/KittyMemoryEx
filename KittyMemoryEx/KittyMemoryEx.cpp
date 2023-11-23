@@ -185,7 +185,7 @@ namespace KittyMemoryEx
             return retMaps;
 
         for (auto &it : maps)
-            if (it.isValid() && !it.isUnknown() && KittyUtils::string_contains(it.pathname, name))
+            if (it.isValid() && !it.isUnknown() && KittyUtils::String::Contains(it.pathname, name))
                 retMaps.push_back(it);
 
         return retMaps;
@@ -204,7 +204,7 @@ namespace KittyMemoryEx
             return retMaps;
 
         for (auto &it : maps)
-            if (it.isValid() && !it.isUnknown() && KittyUtils::string_endswith(it.pathname, name))
+            if (it.isValid() && !it.isUnknown() && KittyUtils::String::EndsWith(it.pathname, name))
                 retMaps.push_back(it);
 
         return retMaps;
@@ -221,7 +221,7 @@ namespace KittyMemoryEx
             return {};
 
         for (auto &it : maps)
-            if (it.isValid() && address >= it.startAddress && address <= it.endAddress)
+            if (it.isValid() && it.contains(address))
                 return it;
 
         return {};

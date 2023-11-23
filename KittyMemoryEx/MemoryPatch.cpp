@@ -122,7 +122,7 @@ MemoryPatch MemoryPatchMgr::createWithBytes(const KittyMemoryEx::ProcMap &map, u
 
 MemoryPatch MemoryPatchMgr::createWithHex(uintptr_t absolute_address, std::string hex)
 {
-  if (!absolute_address || !KittyUtils::validateHexString(hex))
+  if (!absolute_address || !KittyUtils::String::ValidateHex(hex))
     return MemoryPatch();
 
   std::vector<uint8_t> patch_code(hex.length() / 2);
