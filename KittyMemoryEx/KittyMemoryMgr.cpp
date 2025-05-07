@@ -181,34 +181,35 @@ ElfScanner KittyMemoryMgr::getMemElfInZip(const std::string& zip, const std::str
     auto map = maps.front();
 
     struct zip_t* z = zip_open(map.pathname.c_str(), 0, 'r');
-    if (!z)
-        return ret;
+    if (!z) return ret;
 
+    bool found = false;
     int i, n = zip_entries_total(z);
     for (i = 0; i < n; ++i)
     {
         zip_entry_openbyindex(z, i);
         {
             std::string name = zip_entry_name(z);
-            if (!KittyUtils::String::EndsWith(name, elfName))
-                continue;
-
-            unsigned long long data_offset = zip_entry_data_offset(z);
-            for (auto& it : maps)
+            if (KittyUtils::String::EndsWith(name, elfName))
             {
-                if (it.inode == map.inode && it.offset == data_offset)
+                unsigned long long data_offset = zip_entry_data_offset(z);
+                for (auto& it : maps)
                 {
-                    ret = elfScanner.createWithMap(it);
-                    goto end;
+                    if (it.inode == map.inode && it.offset == data_offset)
+                    {
+                        ret = elfScanner.createWithMap(it);
+                        found = true;
+                        break;
+                    }
                 }
             }
-            break;
         }
         zip_entry_close(z);
+        if (found) break;
     }
+
     zip_close(z);
 
-    end:
     return ret;
 }
 

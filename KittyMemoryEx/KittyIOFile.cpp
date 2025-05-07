@@ -187,7 +187,7 @@ bool KittyIOFile::copy(const std::string &srcFilePath, const std::string &dstFil
     return src.Open() && src.writeToFile(dstFilePath);
 }
 
-void KittyIOFile::listFilesCallback(const std::string& dirPath, std::function<void(const std::string&)> cb)
+void KittyIOFile::listFilesCallback(const std::string& dirPath, std::function<bool(const std::string&)> cb)
 {
     if (auto dir = opendir(dirPath.c_str()))
     {
@@ -200,7 +200,9 @@ void KittyIOFile::listFilesCallback(const std::string& dirPath, std::function<vo
                 listFilesCallback(dirPath + f->d_name + "/", cb);
 
             if (f->d_type == DT_REG)
-                cb(dirPath + f->d_name);
+            {
+                if (cb && cb(dirPath + f->d_name)) return;
+            }
         }
         closedir(dir);
     }

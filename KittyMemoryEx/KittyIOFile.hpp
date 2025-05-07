@@ -70,5 +70,5 @@ public:
 
     static bool copy(const std::string &srcFilePath, const std::string &dstFilePath);
 
-    static void listFilesCallback(const std::string& dir, std::function<void(const std::string&)> cb);
+    static void listFilesCallback(const std::string& dir, std::function<bool(const std::string&)> cb);
 };

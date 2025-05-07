@@ -1,5 +1,21 @@
 #include "KittyTrace.hpp"
 
+#if defined(__aarch64__)
+#define kREG_ARGS_NUM 8
+#define uregs regs
+#define r0 regs[0]
+#define lr regs[30]
+#define cpsr pstate
+
+#elif defined(__arm__)
+#define kREG_ARGS_NUM 4
+#define sp ARM_sp
+#define pc ARM_pc
+#define r0 ARM_r0
+#define lr ARM_lr
+#define cpsr ARM_cpsr
+#endif
+
 bool KittyTraceMgr::Attach() const
 {
     if (remotePID() <= 0)
