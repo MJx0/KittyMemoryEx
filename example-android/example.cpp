@@ -43,8 +43,20 @@ int main(int argc, char *args[])
     do
     {
         sleep(1);
+        
         // get loaded elf
         g_il2cppElf = kittyMemMgr.getMemElf("libil2cpp.so");
+
+        // in case lib is loaded from config apk
+        for (auto& it : KittyMemoryEx::getAllMaps(kittyMemMgr.processID()))
+        {
+            if (KittyUtils::String::Contains(it.pathname, kittyMemMgr.processName()) && KittyUtils::String::EndsWith(it.pathname, ".apk"))
+            {
+                g_il2cppElf = kittyMemMgr.getMemElfInZip(it.pathname, "libil2cpp.so");
+                if (g_il2cppElf.isValid()) break;
+            }
+        }
+
     } while (!g_il2cppElf.isValid());
     
     uintptr_t il2cppBase = g_il2cppElf.base();
