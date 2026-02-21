@@ -77,13 +77,10 @@ bool KittyMemoryMgr::initialize(pid_t pid, EKittyMemOP eMemOp, bool initMemPatch
     nbScanner = NativeBridgeScannerMgr(_pMemOp.get(), &memScanner, &elfScanner);
 #endif
 
-#ifdef __ANDROID__
-    // refs https://fadeevab.com/shared-library-injection-on-android-8/
-    uintptr_t defaultCaller = elfScanner.findElf("/libRS.so", EScanElfType::Native, EScanElfFilter::System).base();
-#else
-    uintptr_t defaultCaller = 0;
 #endif
-    trace = KittyTraceMgr(_pMemOp.get(), defaultCaller);
+
+    uintptr_t defaultCaller = 0;
+    trace = KittyTraceMgr(pid, defaultCaller);
 
     return true;
 }

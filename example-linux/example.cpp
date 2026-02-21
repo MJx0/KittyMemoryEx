@@ -251,7 +251,7 @@ int main(int argc, char *args[])
         return 1;
     }
 
-    if (!kittyMemMgr.trace.Attach())
+    if (!kittyMemMgr.trace.attach())
     {
         KITTY_LOGE("Failed to attach.");
         return 1;
@@ -263,14 +263,14 @@ int main(int argc, char *args[])
     KITTY_LOGI("libc [ remote_mmap = %p | remote_munmap = %p ]", (void *)remote_mmap, (void *)remote_munmap);
 
     // mmap(nullptr, KT_PAGE_SIZE, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
-    uintptr_t mmap_ret = kittyMemMgr.trace.callFunction(remote_mmap, 6, nullptr, KT_PAGE_SIZE, PROT_READ | PROT_WRITE,
+    uintptr_t mmap_ret = kittyMemMgr.trace.callFunction(remote_mmap, nullptr, KT_PAGE_SIZE, PROT_READ | PROT_WRITE,
                                                         MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
     // munmap(mmap_ret, KT_PAGE_SIZE);
-    uintptr_t munmap_ret = kittyMemMgr.trace.callFunction(remote_munmap, 2, mmap_ret, KT_PAGE_SIZE);
+    uintptr_t munmap_ret = kittyMemMgr.trace.callFunction(remote_munmap, mmap_ret, KT_PAGE_SIZE);
 
     KITTY_LOGI("Remote call [ mmap_ret=%p | munmap_ret=%p ]", (void *)mmap_ret, (void *)munmap_ret);
 
-    kittyMemMgr.trace.Detach();
+    kittyMemMgr.trace.detach();
 
     return 0;
 }
