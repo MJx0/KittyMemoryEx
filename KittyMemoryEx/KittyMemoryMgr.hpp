@@ -12,6 +12,7 @@
 #include "KittyPtrValidator.hpp"
 #include "KittyPerfEvent.hpp"
 
+using KittyMemoryEx::ProcStatus;
 using KittyMemoryEx::ProcMap;
 using KittyMemoryEx::EProcMapFilter;
 
