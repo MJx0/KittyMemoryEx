@@ -10,6 +10,7 @@
 #include "KittyTrace.hpp"
 #include "KittyAsm.hpp"
 #include "KittyPtrValidator.hpp"
+#include "KittyPerfEvent.hpp"
 
 using KittyMemoryEx::ProcMap;
 using KittyMemoryEx::EProcMapFilter;
