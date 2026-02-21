@@ -1,15 +1,77 @@
-cmake_minimum_required(VERSION 3.5)
+cmake_minimum_required(VERSION 3.16)
 
-project(KittyMemoryExExample)
+project(ExampleProject
+    VERSION 1.0
+    LANGUAGES CXX
+)
 
-set(KITTYMEMORYEX_PATH ${CMAKE_CURRENT_SOURCE_DIR}/../KittyMemoryEx)
-file(GLOB KITTYMEMORYEX_SRC ${KITTYMEMORYEX_PATH}/*.cpp)
-set(KEYSTONE_LIB ${KITTYMEMORYEX_PATH}/Deps/Keystone/libs-android/${CMAKE_ANDROID_ARCH_ABI}/libkeystone.a)
+# -----------------------------
+# Options
+# -----------------------------
+option(KT_DISABLE_KEYSTONE "Disable keystone support" OFF)
 
-set(CMAKE_CXX_FLAGS_DEBUG "${CMAKE_CXX_FLAGS} -Wno-unused-command-line-argument -O0 -g -std=c++20 -DDEBUG")
-set(CMAKE_CXX_FLAGS_RELEASE "${CMAKE_CXX_FLAGS} -Wno-unused-command-line-argument -O2 -s -std=c++20 -DNDEBUG")
+# -----------------------------
+# C++ standard
+# -----------------------------
+set(CMAKE_CXX_STANDARD 20)
+set(CMAKE_CXX_STANDARD_REQUIRED ON)
+set(CMAKE_CXX_EXTENSIONS OFF)
 
-add_library(KittyMemoryExExample SHARED example.cpp ${KITTYMEMORYEX_SRC})
+# -----------------------------
+# KittyMemory library
+# -----------------------------
+set(KITTYMEMORY_PATH "${CMAKE_CURRENT_SOURCE_DIR}/../KittyMemoryEx")
+file(GLOB KITTYMEMORY_SRC "${KITTYMEMORY_PATH}/*.cpp")
+set(KEYSTONE_LIB ${KITTYMEMORY_PATH}/Deps/Keystone/libs-android/${CMAKE_ANDROID_ARCH_ABI}/libkeystone.a)
 
-target_include_directories(KittyMemoryExExample PUBLIC ${KITTYMEMORYEX_PATH})
-target_link_libraries(KittyMemoryExExample -llog ${KEYSTONE_LIB})
+# -----------------------------
+# Project sources
+# -----------------------------
+file(GLOB PROJ_SRC
+    "example.cpp"
+)
+
+# -----------------------------
+# Executable
+# -----------------------------
+add_executable(ExampleProject ${PROJ_SRC} ${KITTYMEMORY_SRC})
+
+
+# -----------------------------
+# Includes
+# -----------------------------
+target_include_directories(ExampleProject
+    PRIVATE
+        ${KITTYMEMORY_PATH}
+)
+
+# -----------------------------
+# Compile definitions
+# -----------------------------
+target_compile_definitions(ExampleProject
+    PRIVATE
+        $<$<CONFIG:Debug>:DEBUG>
+        $<$<CONFIG:Release>:NDEBUG>
+        $<$<BOOL:${KT_DISABLE_KEYSTONE}>:kNO_KEYSTONE>
+)
+
+# -----------------------------
+# Compile options
+# -----------------------------
+target_compile_options(ExampleProject
+    PRIVATE
+        $<$<CONFIG:Debug>:-O0 -g>
+        $<$<CONFIG:Release>:-O2>
+        -Wall
+        -Wextra
+        -Werror
+        -fexceptions
+        -Wno-unused-command-line-argument
+)
+
+# -----------------------------
+# Platform-specific libraries
+# -----------------------------
+if(ANDROID)
+    target_link_libraries(ExampleProject PRIVATE log $<$<NOT:$<BOOL:${KT_DISABLE_KEYSTONE}>>:${KEYSTONE_LIB}>)
+endif()
