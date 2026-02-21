@@ -62,7 +62,7 @@ bool KittyTraceMgr::setOptions(int options)
     errno = 0;
     if (ptrace(PTRACE_SETOPTIONS, _pid, nullptr, options) == -1L)
     {
-        KITTY_LOGE("PTRACE_SEIZE failed for pid %d. \"%s\".", _pid, strerror(errno));
+        KITTY_LOGE("PTRACE_SETOPTIONS failed for pid %d. \"%s\".", _pid, strerror(errno));
         return false;
     }
 
