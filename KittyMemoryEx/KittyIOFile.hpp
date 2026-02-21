@@ -47,13 +47,13 @@ public:
     ssize_t Read(uintptr_t offset, void *buffer, size_t len);
     ssize_t Write(uintptr_t offset, const void *buffer, size_t len);
 
-    inline bool Exists() { return access(_filePath.c_str(), F_OK) != -1; }
+    inline bool Exists() const { return access(_filePath.c_str(), F_OK) != -1; }
 
-    inline bool canRead() { return access(_filePath.c_str(), R_OK) != -1; }
-    inline bool canWrite() { return access(_filePath.c_str(), W_OK) != -1; }
-    inline bool canExecute() { return access(_filePath.c_str(), X_OK) != -1; }
+    inline bool canRead() const { return access(_filePath.c_str(), R_OK) != -1; }
+    inline bool canWrite() const { return access(_filePath.c_str(), W_OK) != -1; }
+    inline bool canExecute() const { return access(_filePath.c_str(), X_OK) != -1; }
 
-    inline bool isFile()
+    inline bool isFile() const
     {
         struct stat s;
         return stat(_filePath.c_str(), &s) != -1 && S_ISREG(s.st_mode);
