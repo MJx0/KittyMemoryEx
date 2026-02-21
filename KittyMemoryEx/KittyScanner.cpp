@@ -1485,13 +1485,18 @@ std::vector<kitty_soinfo_t> LinkerScannerMgr::allSoInfo() const
         return infos;
 
     auto maps = KittyMemoryEx::getAllMaps(_pMem->processID());
-    uintptr_t si = solist();
+    uintptr_t si = solist(), prev = 0;
     while (si && KittyMemoryEx::getAddressMap(_pMem->processID(), si, maps).readable)
     {
         kitty_soinfo_t info = infoFromSoInfo_(si, maps);
         infos.push_back(info);
 
+        prev = si;
+
         if (_pMem->Read(si + _soinfo_offsets.next, &si, sizeof(uintptr_t)) != sizeof(uintptr_t))
+            break;
+
+        if (si == prev)
             break;
     }
     return infos;
@@ -1848,13 +1853,18 @@ std::vector<kitty_soinfo_t> NativeBridgeScannerMgr::allSoInfo() const
         return infos;
 
     auto maps = KittyMemoryEx::getAllMaps(_pMem->processID());
-    uintptr_t si = _sodl;
+    uintptr_t si = _sodl, prev = 0;
     while (si && KittyMemoryEx::getAddressMap(_pMem->processID(), si, maps).readable)
-    {
+    {        
         kitty_soinfo_t info = infoFromSoInfo_(si, maps);
         infos.push_back(info);
 
+        prev = si;
+
         if (_pMem->Read(si + _soinfo_offsets.next, &si, sizeof(uintptr_t)) != sizeof(uintptr_t))
+            break;
+
+        if (si == prev)
             break;
     }
     return infos;
