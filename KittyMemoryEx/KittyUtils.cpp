@@ -33,11 +33,28 @@ namespace KittyUtils
         if (sdk > 0)
             return sdk;
 
-        char buf[0xff] = {0};
+        char buf[0xff]{};
         if (__system_property_get("ro.build.version.sdk", buf))
             sdk = std::atoi(buf);
 
         return sdk;
+    }
+
+    bool isKernel64Bit()
+    {
+        static bool once = false;
+        static bool is64 = false;
+        if (!once)
+        {
+            char value[0xff]{};
+            if (__system_property_get("ro.product.cpu.abilist", value) == 0)
+                __system_property_get("ro.product.cpu.abi", value);
+
+            std::string abi = value;
+            is64 = abi.find("64") != std::string::npos;
+            once = true;
+        }
+        return is64;
     }
 #endif
 
