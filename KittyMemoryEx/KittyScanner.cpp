@@ -1268,7 +1268,7 @@ uintptr_t ElfScannerMgr::findRemoteSymbol(const std::string &local_sym_name, uin
 
     if (!r_lib.isValid())
     {
-        KITTY_LOGE("KittyInjector: Failed to find %s, remote lib not found.", local_sym_name.c_str());
+        KITTY_LOGD("KittyInjector: Failed to find %s, remote lib not found.", local_sym_name.c_str());
         return 0;
     }
 
@@ -1679,6 +1679,7 @@ bool NativeBridgeScannerMgr::init()
         size_t phnum = 0;
     } data;
 	
+
     data.phdr = _sodlElf.phdr();
     data.phnum = _sodlElf.programHeaders().size();
 
