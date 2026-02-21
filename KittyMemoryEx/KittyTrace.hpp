@@ -52,7 +52,13 @@ public:
 
     inline bool isAttached() const
     {
-        return getpid() == KittyMemoryEx::getStatusInteger(remotePID(), "TracerPid");
+        int tracer = 0;
+        return _pid >= 0 && KittyMemoryEx::ProcStatus::getIntFast(_pid, "TracerPid", &tracer) && getpid() == tracer;
+    }
+
+    inline std::vector<pid_t> threads() const
+    {
+        return KittyMemoryEx::getAllThreads(_pid);
     }
 
     /**

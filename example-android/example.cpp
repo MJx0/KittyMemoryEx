@@ -271,7 +271,8 @@ int main(int argc, char *args[])
     KITTY_LOGI("================= PTRACE REMOTE CALL ===============");
 
     // check tracer
-    int tracerPID = KittyMemoryEx::getStatusInteger(processID, "TracerPid");
+    int tracerPID = 0;
+    ProcStatus::getIntFast(processID, "TracerPid", &tracerPID);
     if (tracerPID > 0)
     {
         KITTY_LOGE("Process is being traced by another process with ID %d.", tracerPID);

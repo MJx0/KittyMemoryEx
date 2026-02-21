@@ -72,9 +72,76 @@ namespace KittyMemoryEx
   pid_t getProcessID(const std::string &processName);
 
   /*
-   * Gets integer variable from /proc/[pid]/status
+   * find process threads ID at /proc/[pid]/task
    */
-  int getStatusInteger(pid_t pid, const std::string &var);
+  std::vector<pid_t> getAllThreads(pid_t pid);
+
+  class ProcStatus
+  {
+      std::unordered_map<std::string, std::string> data;
+      static bool parse(const std::string &path, ProcStatus *out);
+      static bool getIntFast(const std::string &path, const std::string &var, int *out);
+
+  public:
+      ProcStatus() = default;
+      ~ProcStatus()
+      {
+          data.clear();
+      }
+
+      inline static bool parse(pid_t pid, ProcStatus *out)
+      {
+          if (pid <= 0)
+              return false;
+          return parse("/proc/" + std::to_string(pid) + "/status", out);
+      }
+
+      inline static bool parse(pid_t pid, pid_t tid, ProcStatus *out)
+      {
+          if (pid <= 0)
+              return false;
+          return parse("/proc/" + std::to_string(pid) + "/task/" + std::to_string(tid) + "/status", out);
+      }
+
+      inline bool contains(const std::string &key) const
+      {
+          return data.find(key) != data.end();
+      }
+
+      inline std::string getString(const std::string &key) const
+      {
+          auto it = data.find(key);
+          return (it != data.end()) ? it->second : "";
+      }
+
+      inline long long getInt(const std::string &key) const
+      {
+          auto it = data.find(key);
+          if (it == data.end())
+              return 0;
+
+          return std::strtoll(it->second.c_str(), nullptr, 10);
+      }
+
+      inline bool getBool(const std::string &key) const
+      {
+          return getInt(key) == 1;
+      }
+
+      inline static bool getIntFast(pid_t pid, const std::string &var, int *out)
+      {
+          if (pid <= 0)
+              return false;
+          return getIntFast("/proc/" + std::to_string(pid) + "/status", var, out);
+      }
+
+      inline static bool getIntFast(pid_t pid, pid_t tid, const std::string &var, int *out)
+      {
+          if (pid <= 0)
+              return false;
+          return getIntFast("/proc/" + std::to_string(pid) + "/task/" + std::to_string(tid) + "/status", var, out);
+      }
+  };
 
   enum class EProcMapFilter
   {
