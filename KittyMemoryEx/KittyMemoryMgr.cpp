@@ -69,11 +69,16 @@ bool KittyMemoryMgr::initialize(pid_t pid, EKittyMemOP eMemOp, bool initMemPatch
     elfScanner = ElfScannerMgr(_pMemOp.get());
 
 #ifdef __ANDROID__
+
 #ifdef __LP64__
-    linkerScanner = LinkerScannerMgr(_pMemOp.get(), elfScanner.findElf("/linker64", EScanElfType::Native, EScanElfFilter::System));
+    linkerScanner = LinkerScannerMgr(_pMemOp.get(),
+                                     elfScanner.findElf("/linker64", EScanElfType::Native, EScanElfFilter::System));
 #else
-    linkerScanner = LinkerScannerMgr(_pMemOp.get(), elfScanner.findElf("/linker", EScanElfType::Native, EScanElfFilter::System));
+    linkerScanner = LinkerScannerMgr(_pMemOp.get(),
+                                     elfScanner.findElf("/linker", EScanElfType::Native, EScanElfFilter::System));
 #endif
+
+#if defined(__i386__) || defined(__x86_64__)
     nbScanner = NativeBridgeScannerMgr(_pMemOp.get(), &memScanner, &elfScanner);
 #endif
 
