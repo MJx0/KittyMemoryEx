@@ -1569,6 +1569,9 @@ NativeBridgeScannerMgr::NativeBridgeScannerMgr(IKittyMemOp *pMem, KittyScannerMg
 
 bool NativeBridgeScannerMgr::init()
 {
+#if !defined(__i386__) && !defined(__x86_64__)
+    return false;
+#else
     if (!_pMem || !_memScanner || !_elfScanner)
         return false;
 
@@ -1607,30 +1610,9 @@ bool NativeBridgeScannerMgr::init()
         return false;
     }
 
-    switch (_nbItf_data.version)
+    _nbItf_data_size = nbItf_data_t::GetStructSize(_nbItf_data.version);
+    if (_nbItf_data_size == 0)
     {
-    case 2: // SIGNAL_VERSION
-        _nbItf_data_size = sizeof(uintptr_t) * 8;
-        break;
-    case 3: // NAMESPACE_VERSION
-        _nbItf_data_size = sizeof(uintptr_t) * 15;
-        break;
-    case 4: // VENDOR_NAMESPACE_VERSION
-        _nbItf_data_size = sizeof(uintptr_t) * 16;
-        break;
-    case 5: // RUNTIME_NAMESPACE_VERSION
-        _nbItf_data_size = sizeof(uintptr_t) * 17;
-        break;
-    case 6: // PRE_ZYGOTE_FORK_VERSION
-        _nbItf_data_size = sizeof(uintptr_t) * 18;
-        break;
-    case 7: // CRITICAL_NATIVE_SUPPORT_VERSION
-        _nbItf_data_size = sizeof(uintptr_t) * 19;
-        break;
-    case 8: // IDENTIFY_NATIVELY_BRIDGED_FUNCTION_POINTERS_VERSION
-        _nbItf_data_size = sizeof(uintptr_t) * 21;
-        break;
-    default:
         KITTY_LOGD("NativeBridgeScanner: Unsupported nativebridge version (%d)", _nbItf_data.version);
         return false;
     }
@@ -1640,7 +1622,7 @@ bool NativeBridgeScannerMgr::init()
 
     if (_pMem->Read(_nbItf, &_nbItf_data, _nbItf_data_size) != _nbItf_data_size)
     {
-        KITTY_LOGD("NativeBridgeScanner: Failed to read NativeBridgeItf daya");
+        KITTY_LOGD("NativeBridgeScanner: Failed to read NativeBridgeItf data");
         return false;
     }
 
@@ -1649,7 +1631,7 @@ bool NativeBridgeScannerMgr::init()
         *(uintptr_t *)&fnNativeBridgeInitialized = _nbElf.findSymbol("_ZN7android23NativeBridgeInitializedEv");
 
     // replace for nb v2
-    if (_nbItf_data.version < 3)
+    if (_nbItf_data.version < KT_NB_NAMESPACE_VERSION)
     {
         uintptr_t pLoadLibrary = _nbElf.findSymbol("NativeBridgeLoadLibrary");
         if (pLoadLibrary == 0)
@@ -1802,6 +1784,7 @@ bool NativeBridgeScannerMgr::init()
 
     _init = _soinfo_offsets.next != 0;
     return _init;
+#endif
 }
 
 std::vector<kitty_soinfo_t> NativeBridgeScannerMgr::allSoInfo() const
