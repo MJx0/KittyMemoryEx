@@ -6,6 +6,7 @@
 
 #include <cstddef>
 #include <cstdint>
+#include <mutex>
 #include <unordered_map>
 #include <functional>
 #include <utility>
@@ -427,31 +428,33 @@ public:
 };
 
 #ifdef __ANDROID__
+struct kitty_linker_syms_t
+{
+    uintptr_t solist = 0;
+    uintptr_t somain = 0;
+    uintptr_t sonext = 0;
+};
+
+struct kitty_soinfo_offsets_t
+{
+    uintptr_t base = 0;
+    uintptr_t size = 0;
+    uintptr_t phdr = 0;
+    uintptr_t phnum = 0;
+    uintptr_t dyn = 0;
+    uintptr_t strtab = 0;
+    uintptr_t symtab = 0;
+    uintptr_t strsz = 0;
+    uintptr_t bias = 0;
+    uintptr_t next = 0;
+};
+
 class LinkerScannerMgr : public ElfScanner
 {
 private:
-    struct
-    {
-        uintptr_t solist;
-        uintptr_t somain;
-        uintptr_t sonext;
-    } _linker_syms;
-    struct
-    {
-        uintptr_t base;
-        uintptr_t size;
-        uintptr_t phdr;
-        uintptr_t phnum;
-        uintptr_t dyn;
-        uintptr_t strtab;
-        uintptr_t symtab;
-        uintptr_t strsz;
-        uintptr_t bias;
-        uintptr_t next;
-    } _soinfo_offsets;
+    kitty_linker_syms_t _linker_syms;
+    kitty_soinfo_offsets_t _soinfo_offsets;
     bool _init;
-
-    bool init();
 
 public:
     LinkerScannerMgr() : ElfScanner(), _init(false)
@@ -463,9 +466,21 @@ public:
     LinkerScannerMgr(IKittyMemOp *pMem, const ElfScanner &linkerElf);
     LinkerScannerMgr(IKittyMemOp *pMem, uintptr_t linkerBase);
 
+    bool init();
+    
     inline ElfScanner *asELF() const
     {
         return (ElfScanner *)this;
+    }
+
+    inline kitty_linker_syms_t linker_offsets() const
+    {
+        return _linker_syms;
+    }
+
+    inline kitty_soinfo_offsets_t soinfo_offsets() const
+    {
+        return _soinfo_offsets;
     }
 
     inline uintptr_t solist() const
@@ -569,19 +584,7 @@ private:
     ElfScannerMgr *_elfScanner;
     ElfScanner _nbElf, _nbImplElf, _sodlElf;
     uintptr_t _sodl;
-    struct
-    {
-        uintptr_t base;
-        uintptr_t size;
-        uintptr_t phdr;
-        uintptr_t phnum;
-        uintptr_t dyn;
-        uintptr_t strtab;
-        uintptr_t symtab;
-        uintptr_t strsz;
-        uintptr_t bias;
-        uintptr_t next;
-    } _soinfo_offsets;
+    kitty_soinfo_offsets_t _soinfo_offsets;
     bool _init;
     bool _isHoudini;
 
@@ -607,6 +610,30 @@ public:
     inline bool isValid() const
     {
         return _init;
+    }
+
+    inline kitty_soinfo_offsets_t soinfo_offsets() const
+    {
+        return _soinfo_offsets;
+    }
+
+    inline ElfScanner &nbElf()
+    {
+        return _nbElf;
+    }
+
+    inline ElfScanner &nbImplElf()
+    {
+        return _nbImplElf;
+    }
+    inline ElfScanner &sodlElf()
+    {
+        return _sodlElf;
+    }
+
+    inline bool isHoudini() const
+    {
+        return _isHoudini;
     }
 
     inline uintptr_t sodl() const
