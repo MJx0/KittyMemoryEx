@@ -475,12 +475,12 @@ ElfScanner::ElfScanner(IKittyMemOp *pMem, uintptr_t elfBase, const std::vector<K
     _realpath = elfBaseMap.pathname;
     if (!elfBaseMap.pathname.empty() && elfBaseMap.offset != 0)
     {
-        std::string inZipPath =
-            KittyUtils::Zip::GetFileInfoByDataOffset(elfBaseMap.pathname, elfBaseMap.offset).fileName;
-        if (!inZipPath.empty())
+        KittyUtils::Zip::ZipEntryInfo ent{};
+        if (KittyUtils::Zip::GetEntryInfoByDataOffset(elfBaseMap.pathname, elfBaseMap.offset, &ent) &&
+            !ent.fileName.empty())
         {
             _realpath += '!';
-            _realpath += inZipPath;
+            _realpath += ent.fileName;
         }
     }
 }
@@ -850,10 +850,11 @@ std::unordered_map<std::string, uintptr_t> ElfScanner::dsymbols()
             return sym_ent->st_value < _loadBias ? _loadBias + sym_ent->st_value : sym_ent->st_value;
         };
 
-        KittyUtils::Zip::ZipFileMMap mmap_info = {nullptr, 0};
+        KittyUtils::Zip::ZipEntryMMap mmap_info = {nullptr, 0};
         if (isZipped())
         {
-            mmap_info = KittyUtils::Zip::MMapFileByDataOffset(_filepath, _baseSegment.offset);
+            if (!KittyUtils::Zip::MMapEntryByDataOffset(_filepath, _baseSegment.offset, &mmap_info))
+                return _dsymbolsMap;
         }
         else
         {
@@ -870,8 +871,10 @@ std::unordered_map<std::string, uintptr_t> ElfScanner::dsymbols()
                 KITTY_LOGD("stat failed for <%s>", _filepath.c_str());
                 return _dsymbolsMap;
             }
-            mmap_info.data = mmap(nullptr, elfSize, PROT_READ, MAP_PRIVATE, elfFile.FD(), 0);
-            mmap_info.size = elfSize;
+            mmap_info.mappingBase = mmap(nullptr, elfSize, PROT_READ, MAP_PRIVATE, elfFile.FD(), 0);
+            mmap_info.mappingSize = elfSize;
+            mmap_info.data = reinterpret_cast<uint8_t *>(mmap_info.mappingBase);
+            mmap_info.size = mmap_info.mappingSize;
             elfFile.Close();
         }
 
@@ -881,9 +884,9 @@ std::unordered_map<std::string, uintptr_t> ElfScanner::dsymbols()
             return _dsymbolsMap;
         }
 
-        auto cleanup = [&] { munmap(mmap_info.data, mmap_info.size); };
+        auto cleanup = [&] { munmap(mmap_info.mappingBase, mmap_info.mappingSize); };
 
-        KT_ElfW(Ehdr) *ehdr = static_cast<KT_ElfW(Ehdr) *>(mmap_info.data);
+        KT_ElfW(Ehdr) *ehdr = reinterpret_cast<KT_ElfW(Ehdr) *>(mmap_info.data);
 
         if (memcmp(ehdr->e_ident, "\177ELF", 4) != 0)
         {
@@ -908,10 +911,10 @@ std::unordered_map<std::string, uintptr_t> ElfScanner::dsymbols()
             return _dsymbolsMap;
         }
 
-        const KT_ElfW(Shdr) *shdr = reinterpret_cast<KT_ElfW(Shdr) *>(static_cast<char *>(mmap_info.data) +
+        const KT_ElfW(Shdr) *shdr = reinterpret_cast<KT_ElfW(Shdr) *>(reinterpret_cast<char *>(mmap_info.data) +
                                                                       ehdr->e_shoff);
         const KT_ElfW(Shdr) *shstrtab_shdr = shdr + ehdr->e_shstrndx;
-        const char *sectionstr = reinterpret_cast<char *>(static_cast<char *>(mmap_info.data) +
+        const char *sectionstr = reinterpret_cast<char *>(reinterpret_cast<char *>(mmap_info.data) +
                                                           shstrtab_shdr->sh_offset);
         for (uint16_t i = 0; i < ehdr->e_shnum; ++i)
         {
@@ -926,11 +929,12 @@ std::unordered_map<std::string, uintptr_t> ElfScanner::dsymbols()
                 (shdr[shdr[i].sh_link].sh_offset + shdr[shdr[i].sh_link].sh_size) > mmap_info.size)
                 continue;
 
-            const KT_ElfW(Sym) *symtab = reinterpret_cast<KT_ElfW(Sym) *>(static_cast<char *>(mmap_info.data) +
+            const KT_ElfW(Sym) *symtab = reinterpret_cast<KT_ElfW(Sym) *>(reinterpret_cast<char *>(mmap_info.data) +
                                                                           shdr[i].sh_offset);
             const size_t symCount = shdr[i].sh_size / shdr[i].sh_entsize;
             const KT_ElfW(Shdr) *strtabShdr = &shdr[shdr[i].sh_link];
-            const char *strtab = reinterpret_cast<char *>(static_cast<char *>(mmap_info.data) + strtabShdr->sh_offset);
+            const char *strtab = reinterpret_cast<char *>(reinterpret_cast<char *>(mmap_info.data) +
+                                                          strtabShdr->sh_offset);
 
             for (size_t j = 0; j < symCount; ++j)
             {
@@ -1045,10 +1049,10 @@ std::vector<ElfScanner> ElfScannerMgr::getAllELFs()
     for (auto &it : maps)
     {
 #ifdef __LP64__
-        if (it.startAddress >= (0x7fffffffffff-0x1000))
+        if (it.startAddress >= (0x7fffffffffff - 0x1000))
             continue;
 #else
-        if (it.startAddress >= (0xffffffff-0x1000))
+        if (it.startAddress >= (0xffffffff - 0x1000))
             continue;
 #endif
 
@@ -1110,15 +1114,18 @@ std::vector<ElfScanner> ElfScannerMgr::getAllELFs()
             !KittyUtils::String::EndsWith(it.pathname, ".so"))
             continue;
 
-        if ((KittyUtils::String::StartsWith(it.pathname, "/data/dalvik-cache/") ||
-             KittyUtils::String::StartsWith(it.pathname, "/system/") ||
-             KittyUtils::String::StartsWith(it.pathname, "/apex/com.android.") ||
-             (KittyUtils::String::StartsWith(it.pathname, "/data/app/") &&
-              KittyUtils::String::Contains(it.pathname, "/oat/"))) &&
-            (KittyUtils::String::EndsWith(it.pathname, ".jar") || KittyUtils::String::EndsWith(it.pathname, ".art") ||
-             KittyUtils::String::EndsWith(it.pathname, ".oat") || KittyUtils::String::EndsWith(it.pathname, ".odex") ||
-             KittyUtils::String::EndsWith(it.pathname, ".dex")))
-            continue;
+        if (KittyUtils::String::StartsWith(it.pathname, "/data/dalvik-cache/") ||
+            KittyUtils::String::StartsWith(it.pathname, "/system/") ||
+            KittyUtils::String::StartsWith(it.pathname, "/apex/com.android.") ||
+            (KittyUtils::String::StartsWith(it.pathname, "/data/app/") &&
+             KittyUtils::String::Contains(it.pathname, "/oat/")))
+        {
+            if (KittyUtils::String::EndsWith(it.pathname, ".jar") ||
+                KittyUtils::String::EndsWith(it.pathname, ".art") ||
+                KittyUtils::String::EndsWith(it.pathname, ".oat") ||
+                KittyUtils::String::EndsWith(it.pathname, ".odex") || KittyUtils::String::EndsWith(it.pathname, ".dex"))
+                continue;
+        }
 #endif
 
         auto elf = ElfScanner(_pMem, it.startAddress, maps);
@@ -1521,11 +1528,12 @@ kitty_soinfo_t LinkerScannerMgr::infoFromSoInfo_(uintptr_t si, const std::vector
         info.realpath = si_map.pathname;
         if (si_map.offset != 0)
         {
-            std::string inZipPath = KittyUtils::Zip::GetFileInfoByDataOffset(si_map.pathname, si_map.offset).fileName;
-            if (!inZipPath.empty())
+            KittyUtils::Zip::ZipEntryInfo ent{};
+            if (KittyUtils::Zip::GetEntryInfoByDataOffset(si_map.pathname, si_map.offset, &ent) &&
+                !ent.fileName.empty())
             {
                 info.realpath += '!';
-                info.realpath += inZipPath;
+                info.realpath += ent.fileName;
             }
         }
     }
@@ -1874,11 +1882,12 @@ kitty_soinfo_t NativeBridgeScannerMgr::infoFromSoInfo_(uintptr_t si,
         info.realpath = si_map.pathname;
         if (si_map.offset != 0)
         {
-            std::string inZipPath = KittyUtils::Zip::GetFileInfoByDataOffset(si_map.pathname, si_map.offset).fileName;
-            if (!inZipPath.empty())
+            KittyUtils::Zip::ZipEntryInfo ent{};
+            if (KittyUtils::Zip::GetEntryInfoByDataOffset(si_map.pathname, si_map.offset, &ent) &&
+                !ent.fileName.empty())
             {
                 info.realpath += '!';
-                info.realpath += inZipPath;
+                info.realpath += ent.fileName;
             }
         }
     }
