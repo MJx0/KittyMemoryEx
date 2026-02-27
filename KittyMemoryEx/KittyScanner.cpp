@@ -1601,9 +1601,6 @@ NativeBridgeScannerMgr::NativeBridgeScannerMgr(IKittyMemOp *pMem, KittyScannerMg
 
 bool NativeBridgeScannerMgr::init()
 {
-#if !defined(__i386__) && !defined(__x86_64__)
-    return false;
-#else
     if (!_pMem || !_memScanner || !_elfScanner)
         return false;
 
@@ -1616,6 +1613,10 @@ bool NativeBridgeScannerMgr::init()
         KITTY_LOGD("NativeBridgeScanner: Failed to find libnativebrdge.so");
         return false;
     }
+
+    *(uintptr_t *)&fnNativeBridgeInitialized = _nbElf.findSymbol("NativeBridgeInitialized");
+    if (fnNativeBridgeInitialized == nullptr)
+        *(uintptr_t *)&fnNativeBridgeInitialized = _nbElf.findSymbol("_ZN7android23NativeBridgeInitializedEv");
 
     _nbImplElf = _elfScanner->findElf("/libhoudini.so", EScanElfType::Native, EScanElfFilter::System);
     if (_nbImplElf.isValid())
@@ -1657,10 +1658,6 @@ bool NativeBridgeScannerMgr::init()
         KITTY_LOGD("NativeBridgeScanner: Failed to read NativeBridgeItf data");
         return false;
     }
-
-    *(uintptr_t *)&fnNativeBridgeInitialized = _nbElf.findSymbol("NativeBridgeInitialized");
-    if (fnNativeBridgeInitialized == nullptr)
-        *(uintptr_t *)&fnNativeBridgeInitialized = _nbElf.findSymbol("_ZN7android23NativeBridgeInitializedEv");
 
     // replace for nb v2
     if (_nbItf_data.version < KT_NB_NAMESPACE_VERSION)
@@ -1842,7 +1839,6 @@ bool NativeBridgeScannerMgr::init()
 
     _init = _soinfo_offsets.next != 0;
     return _init;
-#endif
 }
 
 std::vector<kitty_soinfo_t> NativeBridgeScannerMgr::allSoInfo() const
