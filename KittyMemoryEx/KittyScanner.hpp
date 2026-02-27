@@ -1,5 +1,7 @@
 #pragma once
 
+#include <link.h>
+
 #include "KittyUtils.hpp"
 #include "KittyMemoryEx.hpp"
 #include "KittyMemOp.hpp"
@@ -325,6 +327,22 @@ public:
     inline bool isZipped() const
     {
         return _baseSegment.offset != 0;
+    }
+
+    // app_proccess DT_DEBUG
+    inline bool find_r_debug(r_debug *out) const
+    {
+        for (auto &it : _dynamics)
+        {
+            if (it.d_tag == DT_DEBUG && it.d_un.d_val)
+            {
+                if (out)
+                    _pMem->Read(it.d_un.d_val, out, sizeof(r_debug));
+
+                return true;
+            }
+        }
+        return false;
     }
 };
 
