@@ -850,7 +850,7 @@ std::unordered_map<std::string, uintptr_t> ElfScanner::dsymbols()
             return sym_ent->st_value < _loadBias ? _loadBias + sym_ent->st_value : sym_ent->st_value;
         };
 
-        KittyUtils::Zip::ZipEntryMMap mmap_info = {nullptr, 0};
+        KittyUtils::Zip::ZipEntryMMap mmap_info = {};
         if (isZipped())
         {
             if (!KittyUtils::Zip::MMapEntryByDataOffset(_filepath, _baseSegment.offset, &mmap_info))
