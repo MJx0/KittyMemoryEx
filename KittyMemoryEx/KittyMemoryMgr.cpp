@@ -154,7 +154,7 @@ bool KittyMemoryMgr::dumpMemFile(const std::string &memFile, const std::string &
     fileMaps.erase(fileMaps.begin());
 
     uintptr_t lastEnd = firstMap.endAddress;
-    if (fileMaps.size() > 1)
+    if (fileMaps.size() > 0)
     {
         for (auto &it : fileMaps)
         {
