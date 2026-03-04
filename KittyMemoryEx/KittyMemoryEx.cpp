@@ -175,7 +175,7 @@ namespace KittyMemoryEx
         FILE *fp = fopen(path.c_str(), "r");
         if (!fp)
         {
-            KITTY_LOGD("Couldn't open status file %s, error=%s", filePath, strerror(errno));
+            KITTY_LOGD("Couldn't open status file %s, error=%s", path.c_str(), strerror(errno));
             return false;
         }
 
