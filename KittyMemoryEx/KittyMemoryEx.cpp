@@ -306,6 +306,8 @@ namespace KittyMemoryEx
         if (!address)
             return {};
 
+        address = KittyUtils::untagHeepPtr(address);
+
         for (auto &it : (maps.empty() ? getAllMaps(pid) : maps))
             if (it.isValid() && it.contains(address))
                 return it;

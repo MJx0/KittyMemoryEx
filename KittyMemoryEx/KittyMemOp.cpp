@@ -70,6 +70,7 @@ bool KittyMemSys::init(pid_t pid)
 {
     if (pid < 1)
     {
+        _lastErrno = ESRCH;
         KITTY_LOGE("KittyMemSys: Invalid PID.");
         return false;
     }
@@ -78,7 +79,8 @@ bool KittyMemSys::init(pid_t pid)
     ssize_t rt = syscall(syscall_rpmv_n, 0, 0, 0, 0, 0, 0);
     if (rt == -1 && errno == ENOSYS)
     {
-        KITTY_LOGE("KittyMemSys: syscall not supported.");
+        _lastErrno = ENOSYS;
+        KITTY_LOGE("KittyMemSys: syscall readv/writev not supported.");
         return false;
     }
 
@@ -86,13 +88,13 @@ bool KittyMemSys::init(pid_t pid)
     return true;
 }
 
-size_t KittyMemSys::Read(uintptr_t address, void *buffer, size_t len) const
+size_t KittyMemSys::Read(uintptr_t address, void *buffer, size_t len)
 {
     if (_pid < 1 || !address || !buffer || !len)
         return 0;
 
-    struct iovec lvec { .iov_base = buffer, .iov_len = 0 };
-    struct iovec rvec { .iov_base = reinterpret_cast<void*>(address), .iov_len = 0 };
+    struct iovec lvec { .iov_base = KittyUtils::untagHeepPtr(buffer), .iov_len = 0 };
+    struct iovec rvec { .iov_base = KittyUtils::untagHeepPtr(reinterpret_cast<void*>(address)), .iov_len = 0 };
 
     ssize_t n = 0;
     size_t bytes_read = 0, remaining = len;
@@ -118,8 +120,8 @@ size_t KittyMemSys::Read(uintptr_t address, void *buffer, size_t len) const
         {
             if (n == -1)
             {
-                int err = errno;
-                switch (err)
+                _lastErrno = errno;
+                switch (_lastErrno)
                 {
                 case EPERM:
                     KITTY_LOGE("Failed vm_readv(%p + %p, %p) | Can't access the address space of process ID (%d).",
@@ -135,7 +137,7 @@ size_t KittyMemSys::Read(uintptr_t address, void *buffer, size_t len) const
                     break;
                 default:
                     KITTY_LOGD("Failed vm_readv(%p + %p, %p) | error(%d): %s.",
-                        (void*)address, (void*)(uintptr_t(rvec.iov_base) - address), (void*)rvec.iov_len, err, strerror(err));
+                        (void*)address, (void*)(uintptr_t(rvec.iov_base) - address), (void*)rvec.iov_len, _lastErrno, strerror(_lastErrno));
                 }
             }
             if (read_one_page)
@@ -150,13 +152,13 @@ size_t KittyMemSys::Read(uintptr_t address, void *buffer, size_t len) const
     return bytes_read;
 }
 
-size_t KittyMemSys::Write(uintptr_t address, void *buffer, size_t len) const
+size_t KittyMemSys::Write(uintptr_t address, void *buffer, size_t len)
 {
     if (_pid < 1 || !address || !buffer || !len)
         return 0;
 
-    struct iovec lvec { .iov_base = buffer, .iov_len = 0 };
-    struct iovec rvec { .iov_base = reinterpret_cast<void*>(address), .iov_len = 0 };
+    struct iovec lvec { .iov_base = KittyUtils::untagHeepPtr(buffer), .iov_len = 0 };
+    struct iovec rvec { .iov_base = KittyUtils::untagHeepPtr(reinterpret_cast<void*>(address)), .iov_len = 0 };
 
     ssize_t n = 0;
     size_t bytes_written = 0, remaining = len;
@@ -182,8 +184,8 @@ size_t KittyMemSys::Write(uintptr_t address, void *buffer, size_t len) const
         {
             if (n == -1)
             {
-                int err = errno;
-                switch (err)
+                _lastErrno = errno;
+                switch (_lastErrno)
                 {
                 case EPERM:
                     KITTY_LOGE("Failed vm_writev(%p + %p, %p) | Can't access the address space of process ID (%d).",
@@ -199,7 +201,7 @@ size_t KittyMemSys::Write(uintptr_t address, void *buffer, size_t len) const
                     break;
                 default:
                     KITTY_LOGD("Failed vm_writev(%p + %p, %p) | error(%d): %s.",
-                        (void*)address, (void*)(uintptr_t(rvec.iov_base) - address), (void*)rvec.iov_len, err, strerror(err));
+                        (void*)address, (void*)(uintptr_t(rvec.iov_base) - address), (void*)rvec.iov_len, _lastErrno, strerror(_lastErrno));
                 }
             }
             if (write_one_page)
@@ -220,6 +222,7 @@ bool KittyMemIO::init(pid_t pid)
 {
     if (pid < 1)
     {
+        _lastErrno = ESRCH;
         KITTY_LOGE("KittyMemIO: Invalid PID.");
         return false;
     }
@@ -231,6 +234,7 @@ bool KittyMemIO::init(pid_t pid)
     _pMem = std::make_unique<KittyIOFile>(memPath, O_RDWR);
     if (!_pMem->Open())
     {
+        _lastErrno = _pMem->lastError();
         KITTY_LOGE("Couldn't open mem file %s, error=%s", _pMem->Path().c_str(), _pMem->lastStrError().c_str());
         return false;
     }
@@ -238,20 +242,34 @@ bool KittyMemIO::init(pid_t pid)
     return _pid > 0 && _pMem.get();
 }
 
-size_t KittyMemIO::Read(uintptr_t address, void *buffer, size_t len) const
+size_t KittyMemIO::Read(uintptr_t address, void *buffer, size_t len)
 {
     if (_pid < 1 || !address || !buffer || !len || !_pMem.get())
         return 0;
+
+    address = KittyUtils::untagHeepPtr(address);
+    buffer = KittyUtils::untagHeepPtr(buffer);
 
     ssize_t bytes = _pMem->Read(address, buffer, len);
-    return bytes > 0 ? bytes : 0;
+    if (bytes > 0)
+        return bytes;
+
+    _lastErrno = _pMem->lastError();
+    return 0;
 }
 
-size_t KittyMemIO::Write(uintptr_t address, void *buffer, size_t len) const
+size_t KittyMemIO::Write(uintptr_t address, void *buffer, size_t len)
 {
     if (_pid < 1 || !address || !buffer || !len || !_pMem.get())
         return 0;
 
+    address = KittyUtils::untagHeepPtr(address);
+    buffer = KittyUtils::untagHeepPtr(buffer);
+
     ssize_t bytes = _pMem->Write(address, buffer, len);
-    return bytes > 0 ? bytes : 0;
+    if (bytes > 0)
+        return bytes;
+
+    _lastErrno = _pMem->lastError();
+    return 0;
 }
