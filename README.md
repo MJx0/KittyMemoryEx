@@ -19,6 +19,7 @@ If for any reason you don't want to use Keystone and MemoryPatch::createWithAsm 
 - Memory scan
 - ELF scanner
 - ELF symbol lookup
-- ptrace utilities (linker namespace bypass for remote call)
+- ptrace utilities
+- Setting hard & soft breakpoints
 - Memory dump
 - Linker & NativeBridge scanner for android
