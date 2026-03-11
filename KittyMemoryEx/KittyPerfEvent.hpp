@@ -19,8 +19,14 @@
 #include <linux/perf_event.h>
 #include <linux/hw_breakpoint.h>
 
+/**
+ * @brief Number of ring buffer pages.
+ */
 static constexpr size_t KT_WATCH_PAGES = 8;
 
+/**
+ * @brief Represents the length of a hardware watchpoint in bytes.
+ */
 enum KT_WATCH_LEN
 {
     KT_PERFWATCH_LEN_1 = 1,
@@ -33,6 +39,9 @@ enum KT_WATCH_LEN
     KT_PERFWATCH_LEN_8 = 8,
 };
 
+/**
+ * @brief Represents the different types of hardware watchpoints.
+ */
 enum KT_WATCH_TYPE
 {
     KT_PERFWATCH_EMPTY = 0,
@@ -43,12 +52,34 @@ enum KT_WATCH_TYPE
     KT_PERFWATCH_INVALID = KT_PERFWATCH_RW | KT_PERFWATCH_X,
 };
 
+/**
+ * @brief Structure to hold the performance sample.
+ */
 struct KittyPerfSample
 {
+    /**
+     * @brief The instruction pointer (IP) of the sampled event.
+     */
     uint64_t ip;
+
+    /**
+     * @brief The process ID (PID) of the process that generated the sample.
+     */
     uint32_t pid;
+
+    /**
+     * @brief The thread ID (TID) of the thread that generated the sample.
+     */
     uint32_t tid;
+
+    /**
+     * @brief The timestamp of the sample in nanoseconds.
+     */
     uint64_t time;
+
+    /**
+     * @brief The address of the memory location being watched.
+     */
     uint64_t addr;
 
     KittyPerfSample() : ip(0), pid(0), tid(0), time(0), addr(0)
@@ -60,6 +91,9 @@ struct KittyPerfSample
     }
 };
 
+/**
+ * @brief Class to manage hardware watchpoins.
+ */
 class KittyPerfWatch
 {
 
@@ -70,8 +104,26 @@ public:
         clear();
     }
 
+    /**
+     * @brief Adds a new hardware watchpoint to the watch list.
+     * @param tid The thread ID to attach the watchpoint to.
+     * @param addr The address to watch.
+     * @param bp_type The type of watchpoint (read, write, or read/write).
+     * @param bp_len The length of the watchpoint in bytes.
+     * @return True if the watchpoint was added successfully, false otherwise.
+     */
     bool add(pid_t tid, uintptr_t addr, KT_WATCH_TYPE bp_type, KT_WATCH_LEN bp_len);
+
+    /**
+     * @brief Polls the watch list for new samples.
+     * @param timeout_ms The maximum time to wait for new samples in milliseconds.
+     * @param cb A callback function to process each new sample.
+     */
     void poll(int timeout_ms, const std::function<bool(const KittyPerfSample &)> &cb);
+
+    /**
+     * @brief Clears all watchpoints from the watch list.
+     */
     void clear();
 
 protected:
@@ -84,7 +136,10 @@ protected:
 
     std::vector<WatchInfo> _watches;
 
-    static inline int perf_event_open(struct perf_event_attr *attr, pid_t pid, int cpu, int group_fd,
+    static inline int perf_event_open(struct perf_event_attr *attr,
+                                      pid_t pid,
+                                      int cpu,
+                                      int group_fd,
                                       unsigned long flags)
     {
 #if defined(__aarch64__)
@@ -106,8 +161,19 @@ protected:
     void pollOnce(int timeout_ms, KittyPerfSample *out);
 };
 
+/**
+ * @brief Class to manage trap signaling hardware watchpoins.
+ */
 class KittyPerfTrap : public KittyPerfWatch
 {
 public:
+    /**
+     * @brief Adds a new trap signaling hardware watchpoint to the watch list.
+     * @param tid The thread ID to attach the watchpoint to.
+     * @param addr The address to watch.
+     * @param bp_type The type of watchpoint (read, write, or read/write).
+     * @param bp_len The length of the watchpoint in bytes.
+     * @return True if the watchpoint was added successfully, false otherwise.
+     */
     bool add(pid_t tid, uintptr_t addr, KT_WATCH_TYPE bp_type, KT_WATCH_LEN bp_len);
 };

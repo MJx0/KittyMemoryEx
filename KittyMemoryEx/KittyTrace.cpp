@@ -493,7 +493,8 @@ uintptr_t KittyTraceMgr::_callFunctionFrom(uintptr_t callerAddress, uintptr_t fu
 
         if (!WIFSTOPPED(status))
         {
-            KITTY_LOGE("callFunction(%p): Target process didn't stop (status(0x%x)).", (void *)functionAddress,
+            KITTY_LOGE("callFunction(%p): Target process didn't stop (status(0x%x)).",
+                       (void *)functionAddress,
                        (status));
             return failure_return();
         }
@@ -516,21 +517,29 @@ uintptr_t KittyTraceMgr::_callFunctionFrom(uintptr_t callerAddress, uintptr_t fu
         if (!validate_ret(return_regs, callerAddress))
         {
             KITTY_LOGE("callFunction(%p): Process didn't jump to specified return address (%p)",
-                       (void *)functionAddress, (void *)callerAddress);
-            KITTY_LOGE("callFunction(%p): PC(%p) | RET(%p).", (void *)functionAddress, (void *)(return_regs.KT_REG_PC),
+                       (void *)functionAddress,
+                       (void *)callerAddress);
+            KITTY_LOGE("callFunction(%p): PC(%p) | RET(%p).",
+                       (void *)functionAddress,
+                       (void *)(return_regs.KT_REG_PC),
                        (void *)(return_regs.KT_REG_RET));
 
             siginfo_t si = {};
             getSignalInfo(&si);
 
-            KITTY_LOGE("callFunction(%p): SIG(%s) | CODE(%d) | ADDR(%p).", (void *)functionAddress,
-                       strsignal(si.si_signo), si.si_code, (void *)(si.si_addr));
+            KITTY_LOGE("callFunction(%p): SIG(%s) | CODE(%d) | ADDR(%p).",
+                       (void *)functionAddress,
+                       strsignal(si.si_signo),
+                       si.si_code,
+                       (void *)(si.si_addr));
 
             auto map = KittyMemoryEx::getAddressMap(_pid, uintptr_t(si.si_addr));
             if (map.isValid())
             {
-                KITTY_LOGE("callFunction(%p): MAP(<base>+%p) %s", (void *)functionAddress,
-                           (void *)((map.offset + uintptr_t(si.si_addr)) - map.startAddress), map.toString().c_str());
+                KITTY_LOGE("callFunction(%p): MAP(<base>+%p) %s",
+                           (void *)functionAddress,
+                           (void *)((map.offset + uintptr_t(si.si_addr)) - map.startAddress),
+                           map.toString().c_str());
             }
 
             return failure_return();
@@ -586,8 +595,14 @@ intptr_t KittyTraceMgr::_callSyscall(long sysnr, int nargs, ...)
         va_end(vl);
     }
 
-    KITTY_LOGD("callSyscall(%d, 0x%zx, 0x%zx, 0x%zx, 0x%zx, 0x%zx, 0x%zx)", int(sysnr), vargs[0], vargs[1], vargs[2],
-               vargs[3], vargs[4], vargs[5]);
+    KITTY_LOGD("callSyscall(%d, 0x%zx, 0x%zx, 0x%zx, 0x%zx, 0x%zx, 0x%zx)",
+               int(sysnr),
+               vargs[0],
+               vargs[1],
+               vargs[2],
+               vargs[3],
+               vargs[4],
+               vargs[5]);
 
 #if defined(__arm__)
     tmp_regs.KT_REG_PC &= ~1u;
@@ -598,13 +613,15 @@ intptr_t KittyTraceMgr::_callSyscall(long sysnr, int nargs, ...)
     std::vector<uint8_t> syscall_brk_code(std::begin(KittyTraceInsns::syscallInsn),
                                           std::end(KittyTraceInsns::syscallInsn));
     {
-        syscall_brk_code.insert(syscall_brk_code.end(), std::begin(KittyTraceInsns::brkTrapInsn),
+        syscall_brk_code.insert(syscall_brk_code.end(),
+                                std::begin(KittyTraceInsns::brkTrapInsn),
                                 std::end(KittyTraceInsns::brkTrapInsn));
         int remain = (int(sizeof(long)) - int(syscall_brk_code.size()));
         if (remain > 0)
         {
             for (int i = 0; i < (remain / int(sizeof(KittyTraceInsns::nopInsn))); i++)
-                syscall_brk_code.insert(syscall_brk_code.end(), std::begin(KittyTraceInsns::nopInsn),
+                syscall_brk_code.insert(syscall_brk_code.end(),
+                                        std::begin(KittyTraceInsns::nopInsn),
                                         std::end(KittyTraceInsns::nopInsn));
         }
     }
@@ -672,7 +689,8 @@ intptr_t KittyTraceMgr::_callSyscall(long sysnr, int nargs, ...)
 
     if (!pokeMem(target_pc_mem, syscall_brk_code.data(), syscall_brk_code.size()))
     {
-        KITTY_LOGE("callSyscall(%d): Failed to write syscall code into PC(%p) memory.", int(sysnr),
+        KITTY_LOGE("callSyscall(%d): Failed to write syscall code into PC(%p) memory.",
+                   int(sysnr),
                    (void *)target_pc_mem);
         return 0;
     }
@@ -737,20 +755,27 @@ intptr_t KittyTraceMgr::_callSyscall(long sysnr, int nargs, ...)
             KITTY_LOGE("callSyscall(%d): Target process didn't stop with SIGTRAP", int(sysnr));
         }
 
-        KITTY_LOGE("callSyscall(%d): PC(%p) | RET(%p).", int(sysnr), (void *)(return_regs.KT_REG_PC),
+        KITTY_LOGE("callSyscall(%d): PC(%p) | RET(%p).",
+                   int(sysnr),
+                   (void *)(return_regs.KT_REG_PC),
                    (void *)(return_regs.KT_REG_RET));
 
         siginfo_t si = {};
         getSignalInfo(&si);
 
-        KITTY_LOGE("callSyscall(%d): SIG(%s) | CODE(%d) | ADDR(%p).", int(sysnr), strsignal(si.si_signo), si.si_code,
+        KITTY_LOGE("callSyscall(%d): SIG(%s) | CODE(%d) | ADDR(%p).",
+                   int(sysnr),
+                   strsignal(si.si_signo),
+                   si.si_code,
                    (void *)(si.si_addr));
 
         auto map = KittyMemoryEx::getAddressMap(_pid, uintptr_t(si.si_addr));
         if (map.isValid())
         {
-            KITTY_LOGE("callSyscall(%d): MAP(<base>+%p) %s", int(sysnr),
-                       (void *)((map.offset + uintptr_t(si.si_addr)) - map.startAddress), map.toString().c_str());
+            KITTY_LOGE("callSyscall(%d): MAP(<base>+%p) %s",
+                       int(sysnr),
+                       (void *)((map.offset + uintptr_t(si.si_addr)) - map.startAddress),
+                       map.toString().c_str());
         }
 
         return failure_return();
@@ -821,13 +846,11 @@ again:
 
     for (int i = 0; i < (int(sizeof(uint32_t)) / int(sizeof(KittyTraceInsns::nopInsn))); i++)
     {
-        memcpy(brk_code.data() + (i * sizeof(KittyTraceInsns::nopInsn)), KittyTraceInsns::nopInsn,
+        memcpy(brk_code.data() + (i * sizeof(KittyTraceInsns::nopInsn)),
+               KittyTraceInsns::nopInsn,
                sizeof(KittyTraceInsns::nopInsn));
     }
     memcpy(brk_code.data(), KittyTraceInsns::brkTrapInsn, sizeof(KittyTraceInsns::brkTrapInsn));
-
-    KITTY_LOGE("softTrapWait(%p): Brk code [ %s ]", (void *)address,
-               KittyUtils::data2Hex(brk_code.data(), brk_code.size()).c_str());
 
     if (!pokeMem(address, brk_code.data(), brk_code.size()))
     {
@@ -894,20 +917,27 @@ again:
             KITTY_LOGE("softTrapWait(%p): Target process didn't stop with SIGTRAP", (void *)address);
         }
 
-        KITTY_LOGE("softTrapWait(%p): PC(%p) | RET(%p).", (void *)address, (void *)(regs.KT_REG_PC),
+        KITTY_LOGE("softTrapWait(%p): PC(%p) | RET(%p).",
+                   (void *)address,
+                   (void *)(regs.KT_REG_PC),
                    (void *)(regs.KT_REG_RET));
 
         siginfo_t si = {};
         getSignalInfo(&si);
 
-        KITTY_LOGE("softTrapWait(%p): SIG(%s) | CODE(%d) | ADDR(%p).", (void *)address, strsignal(si.si_signo),
-                   si.si_code, (void *)(si.si_addr));
+        KITTY_LOGE("softTrapWait(%p): SIG(%s) | CODE(%d) | ADDR(%p).",
+                   (void *)address,
+                   strsignal(si.si_signo),
+                   si.si_code,
+                   (void *)(si.si_addr));
 
         auto map = KittyMemoryEx::getAddressMap(_pid, uintptr_t(si.si_addr));
         if (map.isValid())
         {
-            KITTY_LOGE("softTrapWait(%p): MAP(<base>+%p) %s", (void *)address,
-                       (void *)((map.offset + uintptr_t(si.si_addr)) - map.startAddress), map.toString().c_str());
+            KITTY_LOGE("softTrapWait(%p): MAP(<base>+%p) %s",
+                       (void *)address,
+                       (void *)((map.offset + uintptr_t(si.si_addr)) - map.startAddress),
+                       map.toString().c_str());
         }
 
         return failure_return();

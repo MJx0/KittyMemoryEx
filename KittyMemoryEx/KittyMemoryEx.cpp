@@ -17,8 +17,7 @@ namespace KittyMemoryEx
         FILE *fp = fopen(filePath, "r");
         if (!fp)
         {
-            KITTY_LOGD("Couldn't open cmdline file %s, error=%s", filePath,
-                       strerror(errno));
+            KITTY_LOGD("Couldn't open cmdline file %s, error=%s", filePath, strerror(errno));
             return "";
         }
 
@@ -128,7 +127,7 @@ namespace KittyMemoryEx
     }
 
     bool ProcStatus::parse(const std::string &path, ProcStatus *out)
-    {        
+    {
         if (out)
             out->data.clear();
 
@@ -166,36 +165,6 @@ namespace KittyMemoryEx
         return true;
     }
 
-    bool ProcStatus::getIntFast(const std::string &path, const std::string &var, int *out)
-    {
-        if (out)
-            *out = 0;
-
-        errno = 0;
-        FILE *fp = fopen(path.c_str(), "r");
-        if (!fp)
-        {
-            KITTY_LOGD("Couldn't open status file %s, error=%s", path.c_str(), strerror(errno));
-            return false;
-        }
-
-        size_t var_len = var.length();
-        char line[100] = {0};
-        bool found = false;
-        while (fgets(line, sizeof(line), fp))
-        {
-            if (strncmp(line, var.c_str(), var_len) == 0 && line[var_len] == ':')
-            {
-                if (out)
-                    *out = strtol(&line[var_len + 1], nullptr, 10);
-                found = true;
-                break;
-            }
-        }
-        fclose(fp);
-        return found;
-    }
-
     std::vector<ProcMap> getAllMaps(pid_t pid)
     {
         std::vector<ProcMap> retMaps;
@@ -222,9 +191,15 @@ namespace KittyMemoryEx
             char perms[5] = {0}, dev[11] = {0}, pathname[256] = {0};
             // parse a line in maps file
             // (format) startAddress-endAddress perms offset dev inode pathname
-            sscanf(line, "%" SCNxPTR "-%" SCNxPTR " %4s %" SCNxPTR " %s %lu %s",
-                   &map.startAddress, &map.endAddress, perms, &map.offset, dev,
-                   &map.inode, pathname);
+            sscanf(line,
+                   "%" SCNxPTR "-%" SCNxPTR " %4s %" SCNxPTR " %s %lu %s",
+                   &map.startAddress,
+                   &map.endAddress,
+                   perms,
+                   &map.offset,
+                   dev,
+                   &map.inode,
+                   pathname);
 
             map.length = map.endAddress - map.startAddress;
             map.dev = dev;
@@ -265,38 +240,105 @@ namespace KittyMemoryEx
         return retMaps;
     }
 
-    std::vector<ProcMap> getMaps(pid_t pid, EProcMapFilter filter,
+    std::vector<ProcMap> getMaps(pid_t pid,
+                                 EProcMapFilter filter,
                                  const std::string &name,
                                  const std::vector<ProcMap> &maps)
     {
         std::vector<ProcMap> retMaps;
+        regex_t re{};
+        bool isRegex = (filter == EProcMapFilter::Regex);
+
+        if (isRegex)
+        {
+            if (regcomp(&re, name.c_str(), REG_EXTENDED | REG_NOSUB) != 0)
+                return retMaps;
+        }
 
         for (auto &it : (maps.empty() ? getAllMaps(pid) : maps))
         {
-            if (it.isValid())
+            if (!it.isValid())
+                continue;
+
+            bool match = false;
+            switch (filter)
             {
-                switch (filter)
-                {
-                case EProcMapFilter::Equal:
-                    if (it.pathname == name)
-                        retMaps.push_back(it);
-                    break;
-                case EProcMapFilter::StartWith:
-                    if (KittyUtils::String::StartsWith(it.pathname, name))
-                        retMaps.push_back(it);
-                    break;
-                case EProcMapFilter::EndWith:
-                    if (KittyUtils::String::EndsWith(it.pathname, name))
-                        retMaps.push_back(it);
-                    break;
-                case EProcMapFilter::Contains:
-                default:
-                    if (KittyUtils::String::Contains(it.pathname, name))
-                        retMaps.push_back(it);
-                    break;
-                }
+            case EProcMapFilter::Equal:
+                match = (it.pathname == name);
+                break;
+            case EProcMapFilter::StartWith:
+                match = KittyUtils::String::startsWith(it.pathname, name);
+                break;
+            case EProcMapFilter::EndWith:
+                match = KittyUtils::String::endsWith(it.pathname, name);
+                break;
+            case EProcMapFilter::Regex:
+                match = (regexec(&re, it.pathname.c_str(), 0, NULL, 0) == 0);
+                break;
+            case EProcMapFilter::Contains:
+            default:
+                match = KittyUtils::String::contains(it.pathname, name);
+                break;
+            }
+
+            if (match)
+            {
+                retMaps.push_back(it);
             }
         }
+
+        if (isRegex)
+            regfree(&re);
+
+        return retMaps;
+    }
+
+    std::vector<ProcMap> getMaps(EProcMapFilter filter, const std::string &name, const std::vector<ProcMap> &maps)
+    {
+        std::vector<ProcMap> retMaps;
+        regex_t re{};
+        bool isRegex = (filter == EProcMapFilter::Regex);
+
+        if (isRegex)
+        {
+            if (regcomp(&re, name.c_str(), REG_EXTENDED | REG_NOSUB) != 0)
+                return retMaps;
+        }
+
+        for (const auto &it : maps)
+        {
+            if (!it.isValid())
+                continue;
+
+            bool match = false;
+            switch (filter)
+            {
+            case EProcMapFilter::Equal:
+                match = (it.pathname == name);
+                break;
+            case EProcMapFilter::StartWith:
+                match = KittyUtils::String::startsWith(it.pathname, name);
+                break;
+            case EProcMapFilter::EndWith:
+                match = KittyUtils::String::endsWith(it.pathname, name);
+                break;
+            case EProcMapFilter::Regex:
+                match = (regexec(&re, it.pathname.c_str(), 0, NULL, 0) == 0);
+                break;
+            case EProcMapFilter::Contains:
+            default:
+                match = KittyUtils::String::contains(it.pathname, name);
+                break;
+            }
+
+            if (match)
+            {
+                retMaps.push_back(it);
+            }
+        }
+
+        if (isRegex)
+            regfree(&re);
 
         return retMaps;
     }
@@ -308,9 +350,29 @@ namespace KittyMemoryEx
 
         address = KittyUtils::untagHeepPtr(address);
 
-        for (auto &it : (maps.empty() ? getAllMaps(pid) : maps))
-            if (it.isValid() && it.contains(address))
-                return it;
+        if (!maps.empty())
+        {
+            auto it = std::lower_bound(maps.begin(), maps.end(), address, [](const ProcMap &m, uintptr_t val) {
+                return m.endAddress <= val;
+            });
+
+            if (it != maps.end() && address >= it->startAddress && address < it->endAddress)
+            {
+                return *it;
+            }
+        }
+        else
+        {
+            auto pmaps = getAllMaps(pid);
+            auto it = std::lower_bound(pmaps.begin(), pmaps.end(), address, [](const ProcMap &m, uintptr_t val) {
+                return m.endAddress <= val;
+            });
+
+            if (it != pmaps.end() && address >= it->startAddress && address < it->endAddress)
+            {
+                return *it;
+            }
+        }
 
         return {};
     }
@@ -320,9 +382,9 @@ namespace KittyMemoryEx
     {
         std::string directory = "/data/app/", base_apk = "base.apk", ret;
         KittyIOFile::listFilesCallback(directory, [&](const std::string &filePath) {
-            if (KittyUtils::fileNameFromPath(filePath) == base_apk)
+            if (KittyUtils::Path::fileName(filePath) == base_apk)
             {
-                const std::string fileDir = KittyUtils::fileDirectory(filePath);
+                const std::string fileDir = KittyUtils::Path::fileDirectory(filePath);
                 if (strstr(fileDir.c_str(), pkg.c_str()))
                 {
                     ret = fileDir;

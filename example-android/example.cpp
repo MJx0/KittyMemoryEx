@@ -158,7 +158,7 @@ int main(int argc, char *args[])
     get_canShoot = kittyMemMgr.memPatch.createWithAsm(il2cppBase + 0x10948D4, MP_ASM_ARM64, "mov x0, #1; ret");
 
     // format asm
-    auto asm_fmt = KittyUtils::String::Fmt("mov x0, #%d; ret", 65536);
+    auto asm_fmt = KittyUtils::String::fmt("mov x0, #%d; ret", 65536);
     get_gold = kittyMemMgr.memPatch.createWithAsm(il2cppBase + 0x10948D4, MP_ASM_ARM64, asm_fmt);
 #endif
 
@@ -246,12 +246,12 @@ int main(int argc, char *args[])
     KITTY_LOGI("====================== HEX DUMP =====================");
 
     // hex dump by default 8 rows with ASCII
-    KITTY_LOGI("\n%s", KittyUtils::HexDump(magic, sizeof(magic)).c_str());
+    KITTY_LOGI("\n%s", KittyUtils::Data::hexDump(magic, sizeof(magic)).c_str());
 
     KITTY_LOGI("=================== HEX DUMP CUSTOM =================");
 
     // 16 rows, no ASCII
-    KITTY_LOGI("\n%s", KittyUtils::HexDump<16, false>(magic, sizeof(magic)).c_str());
+    KITTY_LOGI("\n%s", KittyUtils::Data::hexDump<16, false>(magic, sizeof(magic)).c_str());
 
 
     KITTY_LOGI("===================== ELFS SCAN ====================");
@@ -271,8 +271,9 @@ int main(int argc, char *args[])
     KITTY_LOGI("================= PTRACE REMOTE CALL ===============");
 
     // check tracer
-    int tracerPID = 0;
-    ProcStatus::getIntFast(processID, "TracerPid", &tracerPID);
+    ProcStatus pstatus{};
+    ProcStatus::parse(processID, &pstatus);
+    int tracerPID = pstatus.getInt("TracerPid");
     if (tracerPID > 0)
     {
         KITTY_LOGE("Process is being traced by another process with ID %d.", tracerPID);

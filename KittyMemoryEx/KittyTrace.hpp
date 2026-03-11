@@ -102,6 +102,9 @@ namespace KittyTraceInsns
 #define KT_ALIGN_STACK(s) s = uintptr_t(intptr_t(intptr_t(s) & intptr_t(~0xF)))
 #define KT_ALIGN_STACK_N(s, n) s = uintptr_t(intptr_t((intptr_t(s) - intptr_t(n)) & intptr_t(~0xF)))
 
+/**
+ * @brief A class for tracing and controlling the execution of processes in a debugging environment.
+ */
 class KittyTraceMgr
 {
 private:
@@ -109,73 +112,99 @@ private:
     uintptr_t _defaultCaller;
     bool _attached, _autoRestoreRegs;
 
-    /**
-     * Call remote function and spoof return address
-     */
     uintptr_t _callFunctionFrom(uintptr_t callerAddress, uintptr_t functionAddress, int nargs, ...);
-
-    /**
-     * Call remote syscall
-     */
     intptr_t _callSyscall(long sysnr, int nargs, ...);
 
 public:
     KittyTraceMgr() : _pid(0), _defaultCaller(0), _attached(false), _autoRestoreRegs(true)
     {
     }
+
+    /**
+     * @brief Constructs a new KittyTraceMgr object.
+     *
+     * @param pid The process ID to trace.
+     * @param defaultCaller The default caller for remote function calls (optional).
+     * @param autoRestoreRegs Whether to automatically restore registers on remote function calls (optional).
+     */
     KittyTraceMgr(pid_t pid, uintptr_t defaultCaller = 0, bool autoRestoreRegs = true)
         : _pid(pid), _defaultCaller(defaultCaller), _attached(isAttached()), _autoRestoreRegs(autoRestoreRegs)
     {
     }
 
+    /**
+     * @brief Returns the PID of the process being traced.
+     */
     inline pid_t pid() const
     {
         return _pid;
     }
 
+    /**
+     * @brief Check if the process is currently attached.
+     */
     inline bool isAttached() const
     {
-        int tracer = 0;
-        return _pid >= 0 && KittyMemoryEx::ProcStatus::getIntFast(_pid, "TracerPid", &tracer) && getpid() == tracer;
+        KittyMemoryEx::ProcStatus pstatus{};
+        KittyMemoryEx::ProcStatus::parse(_pid, &pstatus);
+        int tracerPID = pstatus.getInt("TracerPid");
+        return _pid >= 0 && getpid() == tracerPID;
     }
 
+    /**
+     * @brief Get a list of all threads in the traced process.
+     * @return A vector of thread IDs.
+     */
     inline std::vector<pid_t> threads() const
     {
         return KittyMemoryEx::getAllThreads(_pid);
     }
 
     /**
-     * PTRACE_ATTACH
+     * @brief Attach to the process.
+     * @param options PTRACE options to use (optional).
+     * @return True if the attach was successful, false otherwise.
      */
     bool attach(int options = 0);
 
     /**
-     * PTRACE_SEIZE
+     * @brief Seize the process.
+     * @param options PTRACE options to use (optional).
+     * @return True if the seize was successful, false otherwise.
      */
     bool seize(int options = 0);
 
     /**
-     * PTRACE_SETOPTIONS
+     * @brief Set options for the process being traced.
+     * @param options PTRACE options to set.
+     * @return True if the options were set successfully, false otherwise.
      */
     bool setOptions(int options);
 
     /**
-     * PTRACE_DETACH
+     * @brief Detach from the process.
+     * @return True if the detach was successful, false otherwise.
      */
     bool detach();
 
     /**
-     * PTRACE_INTERRUPT
+     * @brief Interrupt the process.
+     * @return True if the interrupt was successful, false otherwise.
      */
     bool interrupt();
 
     /**
-     * PTRACE_CONT
+     * @brief Continue the process.
+     * @param sig Signal to send to the process (optional).
+     * @return True if the continue was successful, false otherwise.
      */
     bool cont(int sig = 0);
 
     /**
-     * waitpid(pid)
+     * @brief Wait for the process.
+     * @param status Pointer to store the status of the process.
+     * @param options waitpid options to use.
+     * @return The PID of the process.
      */
     inline pid_t wait(int *status, int options) const
     {
@@ -183,17 +212,22 @@ public:
     }
 
     /**
-     * PTRACE_SYSCALL
+     * @brief Wait for the process to enter or exit a syscall.
+     * @return True if the wait was successful, false otherwise.
      */
     bool waitSyscall() const;
 
     /**
-     * PTRACE_SINGLESTEP
+     * @brief Single-step the process.
+     * @param steps Number of steps to single-step.
+     * @return True if the step was successful, false otherwise.
      */
     bool step(int steps = 1) const;
 
     /**
-     * PTRACE_GETSIGINFO
+     * @brief Get the signal information of the process.
+     * @param si Pointer to store the signal information.
+     * @return True if the signal information was retrieved successfully, false otherwise.
      */
     inline bool getSignalInfo(siginfo_t *si) const
     {
@@ -203,27 +237,39 @@ public:
     }
 
     /**
-     * PTRACE_GETREG / PTRACE_GETREGSET
+     * @brief Get the current registers of the process.
+     * @param regs Pointer to store the registers.
+     * @return True if the registers were retrieved successfully, false otherwise.
      */
     bool getRegs(user_regs_struct *regs) const;
 
     /**
-     * PTRACE_SETREG / PTRACE_SETREGSET
+     * @brief Set the current registers of the process.
+     * @param regs Pointer to the registers to set.
+     * @return True if the registers were set successfully, false otherwise.
      */
     bool setRegs(user_regs_struct *regs) const;
 
     /**
-     * Read remote process memory
+     * @brief Read memory from the remote process.
+     * @param addr Address to read from.
+     * @param buf Buffer to store the read data.
+     * @param size Size of the data to read.
+     * @return True if the read was successful, false otherwise.
      */
     bool peekMem(uintptr_t addr, void *buf, size_t size) const;
 
     /**
-     * Write remote process memory
+     * @brief Write memory to the remote process.
+     * @param addr Address to write to.
+     * @param buf Buffer containing the data to write.
+     * @param size Size of the data to write.
+     * @return True if the write was successful, false otherwise.
      */
     bool pokeMem(uintptr_t addr, const void *buf, size_t size) const;
 
     /**
-     * Default caller to use in callFunction
+     * @brief Returns the default caller address for remote function calls.
      */
     inline uintptr_t defaultCaller() const
     {
@@ -231,7 +277,8 @@ public:
     }
 
     /**
-     * Set a default caller to use in callFunction
+     * @brief Sets the default caller address for remote function calls.
+     * @param caller The default caller address.
      */
     inline void setDefaultCaller(uintptr_t caller)
     {
@@ -239,7 +286,7 @@ public:
     }
 
     /**
-     * Automatically back up and restore regs after a remote function call
+     * @brief Returns true if automatic registers restore for remote function calls is enabled, false otherwise.
      */
     inline bool autoRestoreRegs() const
     {
@@ -247,7 +294,8 @@ public:
     }
 
     /**
-     * Set to automatically back up and restore regs after a remote function call
+     * @brief Sets the automatic registers restore flag for remote function calls.
+     * @param flag True to enable automatic restore, false otherwise.
      */
     inline void setAutoRestoreRegs(bool flag)
     {
@@ -255,7 +303,11 @@ public:
     }
 
     /**
-     * Call remote function and spoof return address
+     * @brief Call a function in the remote process and spoof return address.
+     * @param callerAddress The address of the caller.
+     * @param functionAddress The address of the function to call.
+     * @param ... Arguments to pass to the function.
+     * @return The address of the return value.
      */
     template <class... Args>
     uintptr_t callFunctionFrom(uintptr_t callerAddress, uintptr_t functionAddress, Args &&...a)
@@ -264,7 +316,10 @@ public:
     }
 
     /**
-     * Call remote function
+     * @brief Call a function in the remote process.
+     * @param functionAddress The address of the function to call.
+     * @param ... Arguments to pass to the function.
+     * @return The address of the return value.
      */
     template <class... Args>
     uintptr_t callFunction(uintptr_t functionAddress, Args &&...a)
@@ -276,6 +331,13 @@ public:
      * Call remote syscall
      * Write syscall + brkp at PC (PC MUST BE VALID)
      */
+    /**
+     * @brief Call a syscall in the remote process.
+     * @note This function writes syscall + brkp instructions at PC/IP so PC/IP must be at valid executable address.
+     * @param sysnr The syscall number.
+     * @param ... Arguments to pass to the syscall.
+     * @return The result of the syscall.
+     */
     template <class... Args>
     intptr_t callSyscall(long sysnr, Args &&...a)
     {
@@ -283,14 +345,19 @@ public:
     }
 
     /**
-     * Software breakpoint
+     * @brief Sets and wait for software breakpoint at a given address.
+     * @param address The address to set the breakpoint at.
+     * @param cb Callback function to be executed when the breakpoint is hit.
+     * @return True if the breakpoint was set and triggered successfully, false otherwise.
      */
     bool softTrapWait(uintptr_t address, const std::function<bool(user_regs_struct regs)> &cb);
 
 #if 0
      /**
-     * Hardware breakpoint
-     * Size must be 1 ~ 8
+     * @brief Sets and wait for hardware breakpoint at a given address.
+     * @param address The address to set the breakpoint at.
+     * @param cb Callback function to be executed when the breakpoint is hit.
+     * @return True if the breakpoint was set and triggered successfully, false otherwise.
      */
     bool hardTrapWait(uintptr_t address, size_t size, KT_TRAP_TYPE type,
                     const std::function<bool(user_regs_struct regs)> &cb);

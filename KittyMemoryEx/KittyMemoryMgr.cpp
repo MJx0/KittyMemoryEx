@@ -131,14 +131,33 @@ bool KittyMemoryMgr::dumpMemRange(uintptr_t start, uintptr_t end, const std::str
         return false;
     }
 
-    KittyIOFile srcFile(KittyUtils::String::Fmt("/proc/%d/mem", _pid), O_RDONLY);
-    if (!srcFile.Open())
+    bool ok = false;
+    std::vector<char> memBuffer(end - start, 0);
+    if (_eMemOp == EK_MEM_OP_IO)
     {
-        KITTY_LOGE("dumpMemRange: Couldn't open mem file %s, error=%s", srcFile.Path().c_str(), srcFile.lastStrError().c_str());
-        return false;
+        ok = _pMemOp->Read(start, memBuffer.data(), memBuffer.size()) > 0x1000;
+    }
+    else
+    {
+        KittyMemIO memIO = {};
+        if (memIO.init(_pid))
+        {
+            ok = memIO.Read(start, memBuffer.data(), memBuffer.size()) > 0x1000;
+        }
     }
 
-    return srcFile.writeToFile(start, end - start, destination);
+    if (ok)
+    {
+        KittyIOFile destIO(destination, O_WRONLY | O_CREAT | O_TRUNC | O_CLOEXEC, 0666);
+        if (destIO.open())
+        {
+            ok = destIO.write(memBuffer.data(), memBuffer.size()) > 0x1000;
+            destIO.close();
+            return ok;
+        }
+    }
+
+    return false;
 }
 
 bool KittyMemoryMgr::dumpMemFile(const std::string &memFile, const std::string &destination) const
@@ -151,18 +170,17 @@ bool KittyMemoryMgr::dumpMemFile(const std::string &memFile, const std::string &
         return false;
 
     auto firstMap = fileMaps.front();
-    fileMaps.erase(fileMaps.begin());
-
     uintptr_t lastEnd = firstMap.endAddress;
-    if (fileMaps.size() > 0)
-    {
-        for (auto &it : fileMaps)
-        {
-            if (firstMap.inode != it.inode || it.startAddress != lastEnd)
-                break;
 
+    for (size_t i = 1; i < fileMaps.size(); ++i)
+    {
+        const auto &it = fileMaps[i];
+        if (firstMap.inode != 0 && it.inode == firstMap.inode && it.startAddress == lastEnd)
+        {
             lastEnd = it.endAddress;
+            continue;
         }
+        break;
     }
 
     return dumpMemRange(firstMap.startAddress, lastEnd, destination);
@@ -177,10 +195,10 @@ bool KittyMemoryMgr::dumpMemELF(const ElfScanner &elf, const std::string &destin
     if (dumped && elf.isFixedBySoInfo())
     {
         KittyIOFile destIO(destination, O_WRONLY);
-        destIO.Open();
+        destIO.open();
         KT_ElfW(Ehdr) fixedHdr = elf.header();
-        destIO.Write(0, &fixedHdr, sizeof(fixedHdr));
-        destIO.Close();
+        destIO.pwrite(0, &fixedHdr, sizeof(fixedHdr));
+        destIO.close();
     }
 
     return dumped;

@@ -19,16 +19,20 @@
 #endif
 
 static ssize_t call_process_vm_readv(pid_t pid,
-                                     const iovec *lvec, unsigned long liovcnt,
-                                     const iovec *rvec, unsigned long riovcnt,
+                                     const iovec *lvec,
+                                     unsigned long liovcnt,
+                                     const iovec *rvec,
+                                     unsigned long riovcnt,
                                      unsigned long flags)
 {
     return syscall(syscall_rpmv_n, pid, lvec, liovcnt, rvec, riovcnt, flags);
 }
 
 static ssize_t call_process_vm_writev(pid_t pid,
-                                      const iovec *lvec, unsigned long liovcnt,
-                                      const iovec *rvec, unsigned long riovcnt,
+                                      const iovec *lvec,
+                                      unsigned long liovcnt,
+                                      const iovec *rvec,
+                                      unsigned long riovcnt,
                                       unsigned long flags)
 {
     return syscall(syscall_wpmv_n, pid, lvec, liovcnt, rvec, riovcnt, flags);
@@ -93,15 +97,16 @@ size_t KittyMemSys::Read(uintptr_t address, void *buffer, size_t len)
     if (_pid < 1 || !address || !buffer || !len)
         return 0;
 
-    struct iovec lvec { .iov_base = KittyUtils::untagHeepPtr(buffer), .iov_len = 0 };
-    struct iovec rvec { .iov_base = KittyUtils::untagHeepPtr(reinterpret_cast<void*>(address)), .iov_len = 0 };
+    struct iovec lvec{.iov_base = buffer, .iov_len = 0};
+    struct iovec rvec{.iov_base = KittyUtils::untagHeepPtr(reinterpret_cast<void *>(address)), .iov_len = 0};
 
     ssize_t n = 0;
-    size_t bytes_read = 0, remaining = len;
-    bool read_one_page = false;
-    do {
+    size_t nbytes = 0, remaining = len;
+    bool page_mode = false;
+    do
+    {
         size_t remaining_or_pglen = remaining;
-        if (read_one_page)
+        if (page_mode)
             remaining_or_pglen = std::min(KT_PAGE_LEN(rvec.iov_base), remaining);
 
         lvec.iov_len = remaining_or_pglen;
@@ -112,44 +117,28 @@ size_t KittyMemSys::Read(uintptr_t address, void *buffer, size_t len)
         if (n > 0)
         {
             remaining -= n;
-            bytes_read += n;
-            lvec.iov_base = reinterpret_cast<char*>(lvec.iov_base) + n;
-            rvec.iov_base = reinterpret_cast<char*>(rvec.iov_base) + n;
+            nbytes += n;
+            lvec.iov_base = reinterpret_cast<char *>(lvec.iov_base) + n;
+            rvec.iov_base = reinterpret_cast<char *>(rvec.iov_base) + n;
         }
         else
         {
             if (n == -1)
             {
                 _lastErrno = errno;
-                switch (_lastErrno)
-                {
-                case EPERM:
-                    KITTY_LOGE("Failed vm_readv(%p + %p, %p) | Can't access the address space of process ID (%d).",
-                        (void*)address, (void*)(uintptr_t(rvec.iov_base) - address), (void*)rvec.iov_len, _pid);
+                if (_lastErrno != EFAULT && _lastErrno != EIO && _lastErrno != EINVAL)
                     break;
-                case ESRCH:
-                    KITTY_LOGE("Failed vm_readv(%p + %p, %p) | No process with ID (%d) exists.",
-                        (void*)address, (void*)(uintptr_t(rvec.iov_base) - address), (void*)rvec.iov_len, _pid);
-                    break;
-                case ENOMEM:
-                    KITTY_LOGE("Failed vm_readv(%p + %p, %p) | Could not allocate memory for internal copies of the iovec structures.",
-                        (void*)address, (void*)(uintptr_t(rvec.iov_base) - address), (void*)rvec.iov_len);
-                    break;
-                default:
-                    KITTY_LOGD("Failed vm_readv(%p + %p, %p) | error(%d): %s.",
-                        (void*)address, (void*)(uintptr_t(rvec.iov_base) - address), (void*)rvec.iov_len, _lastErrno, strerror(_lastErrno));
-                }
             }
-            if (read_one_page)
+            if (page_mode)
             {
                 remaining -= remaining_or_pglen;
-                lvec.iov_base = reinterpret_cast<char*>(lvec.iov_base) + remaining_or_pglen;
-                rvec.iov_base = reinterpret_cast<char*>(rvec.iov_base) + remaining_or_pglen;
+                lvec.iov_base = reinterpret_cast<char *>(lvec.iov_base) + remaining_or_pglen;
+                rvec.iov_base = reinterpret_cast<char *>(rvec.iov_base) + remaining_or_pglen;
             }
         }
-        read_one_page = n == -1 || size_t(n) != remaining_or_pglen;
+        page_mode = n == -1 || size_t(n) != remaining_or_pglen;
     } while (remaining > 0);
-    return bytes_read;
+    return nbytes;
 }
 
 size_t KittyMemSys::Write(uintptr_t address, void *buffer, size_t len)
@@ -157,13 +146,14 @@ size_t KittyMemSys::Write(uintptr_t address, void *buffer, size_t len)
     if (_pid < 1 || !address || !buffer || !len)
         return 0;
 
-    struct iovec lvec { .iov_base = KittyUtils::untagHeepPtr(buffer), .iov_len = 0 };
-    struct iovec rvec { .iov_base = KittyUtils::untagHeepPtr(reinterpret_cast<void*>(address)), .iov_len = 0 };
+    struct iovec lvec{.iov_base = buffer, .iov_len = 0};
+    struct iovec rvec{.iov_base = KittyUtils::untagHeepPtr(reinterpret_cast<void *>(address)), .iov_len = 0};
 
     ssize_t n = 0;
-    size_t bytes_written = 0, remaining = len;
+    size_t nbytes = 0, remaining = len;
     bool write_one_page = false;
-    do {
+    do
+    {
         size_t remaining_or_pglen = remaining;
         if (write_one_page)
             remaining_or_pglen = std::min(KT_PAGE_LEN(rvec.iov_base), remaining);
@@ -176,44 +166,28 @@ size_t KittyMemSys::Write(uintptr_t address, void *buffer, size_t len)
         if (n > 0)
         {
             remaining -= n;
-            bytes_written += n;
-            lvec.iov_base = reinterpret_cast<char*>(lvec.iov_base) + n;
-            rvec.iov_base = reinterpret_cast<char*>(rvec.iov_base) + n;
+            nbytes += n;
+            lvec.iov_base = reinterpret_cast<char *>(lvec.iov_base) + n;
+            rvec.iov_base = reinterpret_cast<char *>(rvec.iov_base) + n;
         }
         else
         {
             if (n == -1)
             {
                 _lastErrno = errno;
-                switch (_lastErrno)
-                {
-                case EPERM:
-                    KITTY_LOGE("Failed vm_writev(%p + %p, %p) | Can't access the address space of process ID (%d).",
-                        (void*)address, (void*)(uintptr_t(rvec.iov_base) - address), (void*)rvec.iov_len, _pid);
+                if (_lastErrno != EFAULT && _lastErrno != EIO && _lastErrno != EINVAL)
                     break;
-                case ESRCH:
-                    KITTY_LOGE("Failed vm_writev(%p + %p, %p) | No process with ID (%d) exists.",
-                        (void*)address, (void*)(uintptr_t(rvec.iov_base) - address), (void*)rvec.iov_len, _pid);
-                    break;
-                case ENOMEM:
-                    KITTY_LOGE("Failed vm_writev(%p + %p, %p) | Could not allocate memory for internal copies of the iovec structures.",
-                        (void*)address, (void*)(uintptr_t(rvec.iov_base) - address), (void*)rvec.iov_len);
-                    break;
-                default:
-                    KITTY_LOGD("Failed vm_writev(%p + %p, %p) | error(%d): %s.",
-                        (void*)address, (void*)(uintptr_t(rvec.iov_base) - address), (void*)rvec.iov_len, _lastErrno, strerror(_lastErrno));
-                }
             }
             if (write_one_page)
             {
                 remaining -= remaining_or_pglen;
-                lvec.iov_base = reinterpret_cast<char*>(lvec.iov_base) + remaining_or_pglen;
-                rvec.iov_base = reinterpret_cast<char*>(rvec.iov_base) + remaining_or_pglen;
+                lvec.iov_base = reinterpret_cast<char *>(lvec.iov_base) + remaining_or_pglen;
+                rvec.iov_base = reinterpret_cast<char *>(rvec.iov_base) + remaining_or_pglen;
             }
         }
         write_one_page = n == -1 || size_t(n) != remaining_or_pglen;
     } while (remaining > 0);
-    return bytes_written;
+    return nbytes;
 }
 
 /* =================== KittyMemIO =================== */
@@ -232,10 +206,10 @@ bool KittyMemIO::init(pid_t pid)
     char memPath[256] = {0};
     snprintf(memPath, sizeof(memPath), "/proc/%d/mem", _pid);
     _pMem = std::make_unique<KittyIOFile>(memPath, O_RDWR);
-    if (!_pMem->Open())
+    if (!_pMem->open())
     {
         _lastErrno = _pMem->lastError();
-        KITTY_LOGE("Couldn't open mem file %s, error=%s", _pMem->Path().c_str(), _pMem->lastStrError().c_str());
+        KITTY_LOGE("Couldn't open mem file %s, error=%s", _pMem->path().c_str(), _pMem->lastStrError().c_str());
         return false;
     }
 
@@ -248,14 +222,44 @@ size_t KittyMemIO::Read(uintptr_t address, void *buffer, size_t len)
         return 0;
 
     address = KittyUtils::untagHeepPtr(address);
-    buffer = KittyUtils::untagHeepPtr(buffer);
 
-    ssize_t bytes = _pMem->Read(address, buffer, len);
-    if (bytes > 0)
-        return bytes;
+    ssize_t n = 0;
+    size_t nbytes = 0, remaining = len;
+    bool page_mode = false;
+    do
+    {
+        size_t remaining_or_pglen = remaining;
+        if (page_mode)
+            remaining_or_pglen = std::min(KT_PAGE_LEN(address), remaining);
 
-    _lastErrno = _pMem->lastError();
-    return 0;
+        errno = 0;
+        n = _pMem->pread(address, buffer, remaining_or_pglen);
+        if (n > 0)
+        {
+            remaining -= n;
+            nbytes += n;
+            address += n;
+            buffer = reinterpret_cast<char *>(buffer) + n;
+        }
+        else
+        {
+            if (n == -1)
+            {
+                _lastErrno = errno;
+                if (_lastErrno != EFAULT && _lastErrno != EIO && _lastErrno != EINVAL)
+                    break;
+            }
+
+            if (page_mode)
+            {
+                remaining -= remaining_or_pglen;
+                address += remaining_or_pglen;
+                buffer = reinterpret_cast<char *>(buffer) + remaining_or_pglen;
+            }
+        }
+        page_mode = n == -1 || size_t(n) != remaining_or_pglen;
+    } while (remaining > 0);
+    return nbytes;
 }
 
 size_t KittyMemIO::Write(uintptr_t address, void *buffer, size_t len)
@@ -264,12 +268,42 @@ size_t KittyMemIO::Write(uintptr_t address, void *buffer, size_t len)
         return 0;
 
     address = KittyUtils::untagHeepPtr(address);
-    buffer = KittyUtils::untagHeepPtr(buffer);
 
-    ssize_t bytes = _pMem->Write(address, buffer, len);
-    if (bytes > 0)
-        return bytes;
+    ssize_t n = 0;
+    size_t nbytes = 0, remaining = len;
+    bool page_mode = false;
+    do
+    {
+        size_t remaining_or_pglen = remaining;
+        if (page_mode)
+            remaining_or_pglen = std::min(KT_PAGE_LEN(address), remaining);
 
-    _lastErrno = _pMem->lastError();
-    return 0;
+        errno = 0;
+        n = _pMem->pwrite(address, buffer, remaining_or_pglen);
+        if (n > 0)
+        {
+            remaining -= n;
+            nbytes += n;
+            address += n;
+            buffer = reinterpret_cast<char *>(buffer) + n;
+        }
+        else
+        {
+            if (n == -1)
+            {
+                _lastErrno = errno;
+                if (_lastErrno != EFAULT && _lastErrno != EIO && _lastErrno != EINVAL)
+                    break;
+            }
+
+            if (page_mode)
+            {
+                remaining -= remaining_or_pglen;
+                address += remaining_or_pglen;
+                buffer = reinterpret_cast<char *>(buffer) + remaining_or_pglen;
+            }
+        }
+        page_mode = n == -1 || size_t(n) != remaining_or_pglen;
+    } while (remaining > 0);
+    return nbytes;
 }

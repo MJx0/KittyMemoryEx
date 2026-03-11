@@ -13,6 +13,9 @@
 #include <functional>
 #include <utility>
 
+/**
+ * @brief Manager class for pattern scanning operations.
+ */
 class KittyScannerMgr
 {
 private:
@@ -22,104 +25,116 @@ public:
     KittyScannerMgr() : _pMem(nullptr)
     {
     }
+
+    /**
+     * @brief Constructor for KittyScannerMgr.
+     *
+     * @param pMem Pointer to the memory operation interface.
+     */
     KittyScannerMgr(IKittyMemOp *pMem) : _pMem(pMem)
     {
     }
 
     /**
-     * Search for bytes within a memory range and return all results
+     * @brief Searches for bytes within a remote memory range and returns all results.
      *
-     * @param start: search start address
-     * @param end: search end address
-     * @param bytes: bytes to search
-     * @param mask: bytes mask x/?
+     * @param start: The starting address to search.
+     * @param end: The ending address to search.
+     * @param bytes: The bytes to search for.
+     * @param mask: The bytes mask using 'x' and '?' wildcards.
      *
-     * @return vector list of all found bytes addresses
+     * @return A vector containing all addresses where the bytes were found.
      */
-    std::vector<uintptr_t> findBytesAll(const uintptr_t start, const uintptr_t end, const char *bytes,
+    std::vector<uintptr_t> findBytesAll(const uintptr_t start,
+                                        const uintptr_t end,
+                                        const char *bytes,
                                         const std::string &mask) const;
 
     /**
-     * Search for bytes within a memory range and return first result
+     * @brief Searches for bytes within a remote memory range and returns the first result.
      *
-     * @param start: search start address
-     * @param end: search end address
-     * @param bytes: bytes to search
-     * @param mask: bytes mask x/?
+     * @param start: The starting address to search.
+     * @param end: The ending address to search.
+     * @param bytes: The bytes to search for.
+     * @param mask: The bytes mask using 'x' and '?' wildcards.
      *
-     * @return first found bytes address
+     * @return The first address where the bytes were found, or `0` if not found.
      */
-    uintptr_t findBytesFirst(const uintptr_t start, const uintptr_t end, const char *bytes,
+    uintptr_t findBytesFirst(const uintptr_t start,
+                             const uintptr_t end,
+                             const char *bytes,
                              const std::string &mask) const;
 
     /**
-     * Search for hex within a memory range and return all results
+     * @brief Searches for hex within a remote memory range and returns all results.
      *
-     * @param start: search start address
-     * @param end: search end address
-     * @param hex: hex to search
-     * @param mask: hex mask x/?
+     * @param start: The starting address to search.
+     * @param end: The ending address to search.
+     * @param hex: The hex bytes to search for.
+     * @param mask: The hex mask using 'x' and '?' wildcards.
      *
-     * @return vector list of all found hex addresses
+     * @return A vector containing all addresses where the hex was found.
      */
-    std::vector<uintptr_t> findHexAll(const uintptr_t start, const uintptr_t end, std::string hex,
+    std::vector<uintptr_t> findHexAll(const uintptr_t start,
+                                      const uintptr_t end,
+                                      std::string hex,
                                       const std::string &mask) const;
 
     /**
-     * Search for hex within a memory range and return first result
+     * @brief Searches for hex within a remote memory range and returns the first result.
      *
-     * @param start: search start address
-     * @param end: search end address
-     * @param hex: hex to search
-     * @param mask: hex mask x/?
+     * @param start: The starting address to search.
+     * @param end: The ending address to search.
+     * @param hex: The hex bytes to search for.
+     * @param mask: The hex mask using 'x' and '?' wildcards.
      *
-     * @return first found hex address
+     * @return The first address where the hex was found, or `0` if not found.
      */
     uintptr_t findHexFirst(const uintptr_t start, const uintptr_t end, std::string hex, const std::string &mask) const;
 
     /**
-     * Search for ida pattern within a memory range and return all results
+     * @brief Searches for a pattern within a remote memory range using the IDA pattern syntax and returns all results.
      *
-     * @param start: search start address
-     * @param end: search end address
-     * @param pattern: hex bytes and wildcard "?" ( FF DD ? 99 CC ? 00 )
+     * @param start: The starting address to search.
+     * @param end: The ending address to search.
+     * @param pattern: The IDA pattern string (e.g., "FF DD ? 99 CC ? 00").
      *
-     * @return vector list of all found pattern addresses
+     * @return A vector containing all addresses where the pattern was found.
      */
     std::vector<uintptr_t> findIdaPatternAll(const uintptr_t start, const uintptr_t end, const std::string &pattern);
 
     /**
-     * Search for ida pattern within a memory range and return first result
+     * @brief Searches for a pattern within a remote memory range using the IDA pattern syntax and returns the first result.
      *
-     * @param start: search start address
-     * @param end: search end address
-     * @param pattern: hex bytes and wildcard "?" ( FF DD ? 99 CC ? 00 )
+     * @param start: The starting address to search.
+     * @param end: The ending address to search.
+     * @param pattern: The IDA pattern string (e.g., "FF DD ? 99 CC ? 00").
      *
-     * @return first found pattern address
+     * @return The first address where the pattern was found, or `0` if not found.
      */
     uintptr_t findIdaPatternFirst(const uintptr_t start, const uintptr_t end, const std::string &pattern);
 
     /**
-     * Search for data within a memory range and return all results
+     * @brief Searches for data within a remote memory range and returns all results.
      *
-     * @param start: search start address
-     * @param end: search end address
-     * @param data: data to search
-     * @param size: data size
+     * @param start: The starting address to search.
+     * @param end: The ending address to search.
+     * @param data: A pointer to the data to search for.
+     * @param size: The size of the data to search for.
      *
-     * @return vector list of all found data addresses
+     * @return A vector containing all addresses where the data was found.
      */
     std::vector<uintptr_t> findDataAll(const uintptr_t start, const uintptr_t end, const void *data, size_t size) const;
 
     /**
-     * Search for data within a memory range and return first result
+     * @brief Searches for data within a remote memory range and returns the first result.
      *
-     * @param start: search start address
-     * @param end: search end address
-     * @param data: data to search
-     * @param size: data size
+     * @param start: The starting address to search.
+     * @param end: The ending address to search.
+     * @param data: A pointer to the data to search for.
+     * @param size: The size of the data to search for.
      *
-     * @return first found data address
+     * @return The first address where the data was found, or `0` if not found.
      */
     uintptr_t findDataFirst(const uintptr_t start, const uintptr_t end, const void *data, size_t size) const;
 };
@@ -127,6 +142,10 @@ public:
 #ifdef __ANDROID__
 
 #define KT_SOINFO_BUFFER_SZ 0x250
+
+/**
+ * @brief Structure to hold info of linker soinfo
+ */
 struct kitty_soinfo_t
 {
     uintptr_t ptr = 0;
@@ -145,12 +164,19 @@ struct kitty_soinfo_t
     std::string realpath;
 };
 
+/**
+ * @brief Enum class representing the type of ELF file to scan for.
+ */
 enum class EScanElfType : uint32_t
 {
     Any,
     Native,
     Emulated,
 };
+
+/**
+ * @brief Enum class representing the filter criteria for ELF files to scan.
+ */
 enum class EScanElfFilter : uint32_t
 {
     Any,
@@ -160,6 +186,10 @@ enum class EScanElfFilter : uint32_t
 
 #endif
 
+/**
+ * @brief Represents a scanner for memory ELF files.
+ * This class is used to scan ELF files from memory and extract information about their contents.
+ */
 class ElfScanner
 {
     friend class ElfScannerMgr;
@@ -196,140 +226,270 @@ public:
     {
     }
 
+    /**
+     * @brief Constructor for ElfScanner class.
+     * This constructor initializes the ElfScanner class with the given ELF base address.
+     *
+     * @param pMem Pointer to the memory operation interface.
+     * @param elfBase The base address of the ELF file.
+     * @param maps The vector of cached process memory maps.
+     */
     ElfScanner(IKittyMemOp *pMem, uintptr_t elfBase, const std::vector<KittyMemoryEx::ProcMap> &maps);
+
+    /**
+     * @brief Constructor for ElfScanner class.
+     * This constructor initializes the ElfScanner class with the given ELF base address.
+     *
+     * @param pMem Pointer to the memory operation interface.
+     * @param elfBase The base address of the ELF file.
+     * @param maps The vector of cached process memory maps (optional).
+     */
     ElfScanner(IKittyMemOp *pMem, uintptr_t elfBase)
-        : ElfScanner(pMem, elfBase,
+        : ElfScanner(pMem,
+                     elfBase,
                      (pMem ? KittyMemoryEx::getAllMaps(pMem->processID()) : std::vector<KittyMemoryEx::ProcMap>()))
     {
     }
 
 #ifdef __ANDROID__
+    /**
+     * @brief Constructor for ElfScanner class.
+     * This constructor initializes the ElfScanner class with the given soinfo.
+     *
+     * @param pMem Pointer to the memory operation interface.
+     * @param soinfo The soinfo of the ELF file.
+     * @param maps The vector of cached process memory maps.
+     */
     ElfScanner(IKittyMemOp *pMem, const kitty_soinfo_t &soinfo, const std::vector<KittyMemoryEx::ProcMap> &maps);
+
+    /**
+     * @brief Constructor for ElfScanner class.
+     * This constructor initializes the ElfScanner class with the given soinfo.
+     *
+     * @param pMem Pointer to the memory operation interface.
+     * @param soinfo The soinfo of the ELF file.
+     * @param maps The vector of cached process memory maps (optional).
+     */
     ElfScanner(IKittyMemOp *pMem, const kitty_soinfo_t &soinfo)
-        : ElfScanner(pMem, soinfo,
+        : ElfScanner(pMem,
+                     soinfo,
                      (pMem ? KittyMemoryEx::getAllMaps(pMem->processID()) : std::vector<KittyMemoryEx::ProcMap>()))
     {
     }
 #endif
 
+    /**
+     * @brief Checks if the ElfScanner class is valid.
+     */
     inline bool isValid() const
     {
         return _elfBase && _loadSize && _phdr && _loadBias;
     }
 
+    /**
+     * @brief Checks if the ELF file is fixed by soinfo.
+     * Some Elf headers are obfuscated or removed,
+     * \ref createWithSoInfo(const kitty_soinfo_t&, const std::vector<KittyMemory::ProcMap>&) may fix header.
+     */
     inline bool isFixedBySoInfo() const
     {
         return _fixedBySoInfo;
     }
 
+    /**
+     * @brief Elf's Base address in memory.
+     */
     inline uintptr_t base() const
     {
         return _elfBase;
     }
 
+    /**
+     * @brief Elf's end address in memory.
+     */
     inline uintptr_t end() const
     {
         return _elfBase + _loadSize;
     }
 
+    /**
+     * @brief Elf's header.
+     */
     inline KT_ElfW(Ehdr) header() const
     {
         return _ehdr;
     }
 
+    /**
+     * @brief Elf's program header address in memory.
+     */
     inline uintptr_t phdr() const
     {
         return _phdr;
     }
 
+    /**
+     * @brief Vector of Elf's program headers.
+     */
     inline std::vector<KT_ElfW(Phdr)> programHeaders() const
     {
         return _phdrs;
     }
 
+    /**
+     * @brief Elf's number of loads.
+     */
     inline int loads() const
     {
         return _loads;
     }
 
+    /**
+     * @brief Elf's load bias address in memory.
+     */
     inline uintptr_t loadBias() const
     {
         return _loadBias;
     }
 
+    /**
+     * @brief Elf's load size.
+     */
     inline uintptr_t loadSize() const
     {
         return _loadSize;
     }
 
+    /**
+     * @brief Elf's dynamic section address in memory.
+     */
     inline uintptr_t dynamic() const
     {
         return _dynamic;
     }
 
+    /**
+     * @brief Vector of Elf's dynamic sections.
+     */
     inline std::vector<KT_ElfW(Dyn)> dynamics() const
     {
         return _dynamics;
     }
 
+    /**
+     * @brief Elf's dynamic string table address in memory.
+     */
     inline uintptr_t stringTable() const
     {
         return _stringTable;
     }
 
+    /**
+     * @brief Elf's dynamic symbol table address in memory.
+     */
     inline uintptr_t symbolTable() const
     {
         return _symbolTable;
     }
 
+    /**
+     * @brief Elf's dynamic string table size.
+     */
     inline size_t stringTableSize() const
     {
         return _strsz;
     }
 
+    /**
+     * @brief Elf's symbol entry size.
+     */
     inline size_t symbolEntrySize() const
     {
         return _syment;
     }
 
-    // dynamic symbols from DT_SYMTAB
+    /**
+     * @brief Returns a map of symbols from the dynamic symbol table (DT_SYMTAB).
+     * @return A map where keys are symbol names and values are their corresponding memory addresses.
+     */
     std::unordered_map<std::string, uintptr_t> symbols();
 
-    // debug symbols from SHT_SYMTAB on disk
+    /**
+     * @brief Returns a map of symbols from the symbol table (SHT_SYMTAB) on disk.
+     * @return A map where keys are symbol names and values are their corresponding memory addresses.
+     */
     std::unordered_map<std::string, uintptr_t> dsymbols();
 
+    /**
+     * @brief Finds a symbol from the dynamic symbol table by name.
+     *
+     * @param symbolName The name of the symbol to find.
+     * @return The memory address of the symbol if found, otherwise zero.
+     */
     uintptr_t findSymbol(const std::string &symbolName);
+
+    /**
+     * @brief Finds a symbol from the symbol table (SHT_SYMTAB) on disk by name.
+     *
+     * @param symbolName The name of the symbol to find.
+     * @return The memory address of the symbol if found, otherwise zero.
+     */
     uintptr_t findDebugSymbol(const std::string &symbolName);
 
-    inline KittyMemoryEx::ProcMap baseSegment() const
+    /**
+     * @brief Elf's base memory map info.
+     */
+    KittyMemoryEx::ProcMap baseSegment() const
     {
         return _baseSegment;
     }
 
-    inline std::vector<KittyMemoryEx::ProcMap> segments() const
+    /**
+     * @brief Returns all of Elf's memory maps info.
+     */
+    std::vector<KittyMemoryEx::ProcMap> segments() const
     {
         return _segments;
     }
 
-    inline std::vector<KittyMemoryEx::ProcMap> bssSegments() const
+    /**
+     * @brief Returns all of Elf's BSS memory maps.
+     */
+    std::vector<KittyMemoryEx::ProcMap> bssSegments() const
     {
         return _bssSegments;
     }
 
+    /**
+     * @brief Returns the file path of the memory mapped Elf file.
+     */
     inline std::string filePath() const
     {
         return _filepath;
     }
+
+    /**
+     * @brief Returns the real path of the memory mapped Elf file
+     * (e.g, incase if it's inside a zip, it will return full path to zip entry).
+     */
     inline std::string realPath() const
     {
         return _realpath;
     }
+
+    /**
+     * @brief Returns if the memory mapped Elf file was loaded from zip file.
+     */
     inline bool isZipped() const
     {
         return _baseSegment.offset != 0;
     }
 
-    // app_proccess DT_DEBUG
+    /**
+     * @brief Finds the r_debug structure in the process.
+     * @param out Pointer to store the r_debug structure.
+     * @return True if the r_debug structure is found, false otherwise.
+     */
     inline bool find_r_debug(r_debug *out) const
     {
         for (auto &it : _dynamics)
@@ -346,6 +506,9 @@ public:
     }
 };
 
+/**
+ * @brief Manager class for ELF scanners.
+ */
 class ElfScannerMgr
 {
     friend class NativeBeidgeScannerMgr;
@@ -359,19 +522,40 @@ public:
     ElfScannerMgr() : _pMem(nullptr)
     {
     }
+
+    /**
+     * @brief Constructor for ElfScannerMgr.
+     * @param pMem Pointer to the memory operation interface.
+     */
     ElfScannerMgr(IKittyMemOp *pMem) : _pMem(pMem)
     {
     }
 
+    /**
+     * @brief Constructs ElfScanner class with the given ELF base address.
+     *
+     * @param elfBase The base address of the ELF file in memory.
+     */
     inline ElfScanner createWithBase(uintptr_t elfBase) const
     {
         return !_pMem ? ElfScanner() : ElfScanner(_pMem, elfBase);
     }
+
+    /**
+     * @brief Constructs ElfScanner class with the given process memory map info.
+     *
+     * @param elfMap The base process memory map of the ELF file.
+     */
     inline ElfScanner createWithMap(const KittyMemoryEx::ProcMap &map) const
     {
         return !_pMem ? ElfScanner() : ElfScanner(_pMem, map.startAddress);
     }
 #ifdef __ANDROID__
+    /**
+     * @brief Constructs ElfScanner class with the given soinfo.
+     *
+     * @param soinfo The soinfo of the ELF file.
+     */
     inline ElfScanner createWithSoInfo(const kitty_soinfo_t &soinfo) const
     {
         return !_pMem ? ElfScanner() : ElfScanner(_pMem, soinfo);
@@ -379,17 +563,27 @@ public:
 #endif
 
     /**
-     * Validate ELF
-     * @param elfBase: ELF start address
+     * @brief Checks if provided base address is an Elf
+     * @param elfBase: ELF base address
      */
     bool isValidELF(uintptr_t elfBase) const;
 
+    /**
+     * @brief Checks if the memory-mapped ELF file is native to the Android device.
+     * @param elf The ELF scanner object.
+     * @return True if the ELF is native, false otherwise.
+     */
     inline bool isElfNative(const ElfScanner &elf)
     {
         int a = getProgramElf().header().e_machine, b = elf.header().e_machine;
         return a != 0 && b != 0 && a == b;
     }
 
+    /**
+     * @brief Checks if the memory-mapped ELF file is emulated to the Android device.
+     * @param elf The ELF scanner object.
+     * @return True if the ELF is emulated, false otherwise.
+     */
     inline bool isElfEmulated(const ElfScanner &elf)
     {
         int a = getProgramElf().header().e_machine, b = elf.header().e_machine;
@@ -397,55 +591,86 @@ public:
     }
 
     /**
-     * /proc/[pid]/exe
+     * @brief Returns the program ELF.
      */
     ElfScanner &getProgramElf();
 
 #ifdef __ANDROID__
     /**
-     * Fetch all in-memory loaded ELFs
+     * @brief Fetches all memory mapped ELFs.
+     * @param type (optional) The type of ELF file to find (e.g., Any, Native, Emulated).
+     * @param filter (optional) The filter to apply when searching for ELF files (e.g., Any, System, App).
+     * @return A vector of all memory mapped ELFs.
      */
     std::vector<ElfScanner> getAllELFs(EScanElfType type = EScanElfType::Any,
                                        EScanElfFilter filter = EScanElfFilter::Any);
 
     /**
-     * Find in-memory loaded ELF with name
+     * @brief Searches for a memory mapped ELF file based on the given path, type, and filter.
+     * @note If multiple ELFs found, it will prioritize ELFs with dynamic and return the latest mapped one with the
+     * most segments. This function can extract full path to loaded zipped Elf files.
+     *
+     * @param path The path to the ELF file to find.
+     * @param type (optional) The type of ELF file to find (e.g., Any, Native, Emulated).
+     * @param filter (optional) The filter to apply when searching for ELF files. (e.g., Any, System, App).
+     * @return An ElfScanner object representing the found ELF file, or an empty ElfScanner object if not found.
      */
-    ElfScanner findElf(const std::string &path, EScanElfType type = EScanElfType::Any,
+    ElfScanner findElf(const std::string &path,
+                       EScanElfType type = EScanElfType::Any,
                        EScanElfFilter filter = EScanElfFilter::Any);
 
     /**
-     * lookup symbol name in all loaded ELFs
-     * @return a vector of symbol absolute address and the ELF where the symbol was found in
+     * @brief Lookup dynamic symbol name in all loaded ELFs
+     * @param symbolName The name of the symbol to lookup.
+     * @param type (optional) The type of ELF file to find (e.g., Any, Native, Emulated).
+     * @param filter (optional) The filter to apply when searching for ELF files. (e.g., Any, System, App).
+     * @return A vector of pairs containing the symbol's absolute address and the ELF where the symbol was found.
      */
     std::vector<std::pair<uintptr_t, ElfScanner>> findSymbolAll(const std::string &symbolName,
                                                                 EScanElfType type = EScanElfType::Any,
                                                                 EScanElfFilter filter = EScanElfFilter::Any);
 #else
     /**
-     * Fetch all in-memory loaded ELFs
+     * @brief Fetches all memory mapped ELFs.
+     * @return A vector of all memory mapped ELFs.
      */
     std::vector<ElfScanner> getAllELFs();
 
     /**
-     * Find in-memory loaded ELF with name
+     * @brief Searches for a memory mapped ELF file based on the given path, type, and filter.
+     * @note If multiple ELFs found, it will prioritize ELFs with dynamic and return the latest mapped one with the
+     * most segments. This function can extract full path to loaded zipped Elf files.
+     *
+     * @param path The path to the ELF file to find.
+     * @return An ElfScanner object representing the found ELF file, or an empty ElfScanner object if not found.
      */
     ElfScanner findElf(const std::string &path);
 
     /**
-     * lookup symbol name in all loaded ELFs
-     * @return a vector of symbol absolute address and the ELF where the symbol was found in
+     * @brief Lookup dynamic symbol name in all loaded ELFs
+     * @param symbolName The name of the symbol to lookup.
+     * @return A vector of pairs containing the symbol's absolute address and the ELF where the symbol was found.
      */
     std::vector<std::pair<uintptr_t, ElfScanner>> findSymbolAll(const std::string &symbolName);
 #endif
 
     /**
-     * Find remote address of local symbol.
+     * @brief Finds the remote address of a local symbol.
+     *
+     * This function searches for the remote address of a local symbol based on its name and address.
+     *
+     * @param local_sym_name The name of the local symbol.
+     * @param local_sym_addr The address of the local symbol.
+     * @return The remote address of the symbol, or 0 if not found.
      */
     uintptr_t findRemoteSymbol(const std::string &local_sym_name, uintptr_t local_sym_addr);
 };
 
 #ifdef __ANDROID__
+
+/**
+ * @brief Structure to hold info of linker symbols
+ */
 struct kitty_linker_syms_t
 {
     uintptr_t solist = 0;
@@ -453,6 +678,9 @@ struct kitty_linker_syms_t
     uintptr_t sonext = 0;
 };
 
+/**
+ * @brief Structure to hold info of linker soinfo offsets
+ */
 struct kitty_soinfo_offsets_t
 {
     uintptr_t base = 0;
@@ -467,6 +695,11 @@ struct kitty_soinfo_offsets_t
     uintptr_t next = 0;
 };
 
+/**
+ * @brief Manager class for linker Elf.
+ *
+ * This class inherits from ElfScanner and provides methods for linker Elf.
+ */
 class LinkerScannerMgr : public ElfScanner
 {
 private:
@@ -481,26 +714,54 @@ public:
         memset(&_soinfo_offsets, 0, sizeof(_soinfo_offsets));
     }
 
+    /**
+     * @brief Constructor for LinkerScannerMgr with a linker base address.
+     * @param pMem Pointer to the memory operation interface.
+     * @param linkerBase The base address of the linker.
+     */
     LinkerScannerMgr(IKittyMemOp *pMem, const ElfScanner &linkerElf);
+
+    /**
+     * @brief Constructor for LinkerScannerMgr with the linker ElfScanner object.
+     * @param pMem Pointer to the memory operation interface.
+     * @param linkerElf Linker ElfScanner object.
+     */
     LinkerScannerMgr(IKittyMemOp *pMem, uintptr_t linkerBase);
 
+    /**
+     * @brief Initializes the linker scanner.
+     * @return True if initialization is successful, false otherwise.
+     */
     bool init();
-    
+
+    /**
+     * @brief Converts the LinkerScannerMgr object to an ElfScanner pointer.
+     * @return The ElfScanner pointer.
+     */
     inline ElfScanner *asELF() const
     {
         return (ElfScanner *)this;
     }
 
+    /**
+     * @brief Returns the linker symbols offsets.
+     */
     inline kitty_linker_syms_t linker_offsets() const
     {
         return _linker_syms;
     }
 
+    /**
+     * @brief Returns the soinfo offsets.
+     */
     inline kitty_soinfo_offsets_t soinfo_offsets() const
     {
         return _soinfo_offsets;
     }
 
+    /**
+     * @brief Returns the linker solist head address.
+     */
     inline uintptr_t solist() const
     {
         if (!isValid() || !_linker_syms.solist)
@@ -510,6 +771,9 @@ public:
         return _pMem->Read(_linker_syms.solist, &value, sizeof(uintptr_t)) == sizeof(uintptr_t) ? value : 0;
     }
 
+    /**
+     * @brief Returns the linker somain address.
+     */
     inline uintptr_t somain() const
     {
         if (!isValid() || !_linker_syms.somain)
@@ -519,6 +783,9 @@ public:
         return _pMem->Read(_linker_syms.somain, &value, sizeof(uintptr_t)) == sizeof(uintptr_t) ? value : 0;
     }
 
+    /**
+     * @brief Returns the linker solist tail address.
+     */
     inline uintptr_t sonext() const
     {
         if (!isValid() || !_linker_syms.sonext)
@@ -528,6 +795,9 @@ public:
         return _pMem->Read(_linker_syms.sonext, &value, sizeof(uintptr_t)) == sizeof(uintptr_t) ? value : 0;
     }
 
+    /**
+     * @brief Returns the linker somain info.
+     */
     inline kitty_soinfo_t somainInfo() const
     {
         if (!isValid() || !_linker_syms.somain)
@@ -536,6 +806,9 @@ public:
         return infoFromSoInfo_(somain(), KittyMemoryEx::getAllMaps(_pMem->processID()));
     }
 
+    /**
+     * @brief Returns the linker solist tail info.
+     */
     inline kitty_soinfo_t sonextInfo() const
     {
         if (!isValid())
@@ -544,8 +817,16 @@ public:
         return infoFromSoInfo_(sonext(), KittyMemoryEx::getAllMaps(_pMem->processID()));
     }
 
+    /**
+     * @brief Returns all linker's soinfo.
+     */
     std::vector<kitty_soinfo_t> allSoInfo() const;
 
+    /**
+     * @brief Finds a soinfo by name.
+     * @param name The name of the soinfo.
+     * @return The soinfo if found or empty object.
+     */
     kitty_soinfo_t findSoInfo(const std::string &name) const;
 
 private:
@@ -578,6 +859,9 @@ enum KT_NativeBridgeImplementationVersion
     KT_NB_IDENTIFY_NATIVELY_BRIDGED_FUNCTION_POINTERS_VERSION = 8,
 };
 
+/**
+ * @brief Structure to hold info of native bridge callbacks data.
+ */
 struct nbItf_data_t
 {
     inline nbItf_data_t()
@@ -600,16 +884,25 @@ struct nbItf_data_t
     const char *(*getError)();
     bool (*isPathSupported)(const char *library_path);
     bool (*initAnonymousNamespace)(const char *public_ns_sonames, const char *anon_ns_library_path);
-    void *(*createNamespace)(const char *name, const char *ld_library_path, const char *default_library_path,
-                             uint64_t type, const char *permitted_when_isolated_path, void *parent_ns);
+    void *(*createNamespace)(const char *name,
+                             const char *ld_library_path,
+                             const char *default_library_path,
+                             uint64_t type,
+                             const char *permitted_when_isolated_path,
+                             void *parent_ns);
     bool (*linkNamespaces)(void *from, void *to, const char *shared_libs_sonames);
     void *(*loadLibraryExt)(const char *libpath, int flag, void *ns);
     void *(*getVendorNamespace)();
     void *(*getExportedNamespace)(const char *name);
     void (*preZygoteFork)();
-    void *(*getTrampolineWithJNICallType)(void *handle, const char *name, const char *shorty, uint32_t len,
+    void *(*getTrampolineWithJNICallType)(void *handle,
+                                          const char *name,
+                                          const char *shorty,
+                                          uint32_t len,
                                           enum KT_JNICallType jni_call_type);
-    void *(*getTrampolineForFunctionPointer)(const void *method, const char *shorty, uint32_t len,
+    void *(*getTrampolineForFunctionPointer)(const void *method,
+                                             const char *shorty,
+                                             uint32_t len,
                                              enum KT_JNICallType jni_call_type);
     bool (*isNativeBridgeFunctionPointer)(const void *method);
 
@@ -636,6 +929,9 @@ struct nbItf_data_t
     }
 };
 
+/**
+ * @brief Manager class for scanning native bridge.
+ */
 class NativeBridgeScannerMgr
 {
 private:
@@ -663,44 +959,79 @@ public:
         memset(&_soinfo_offsets, 0, sizeof(_soinfo_offsets));
     }
 
+    /**
+     * @brief Constructor for NativeBridgeScannerMgr.
+     * @param pMem Pointer to the memory operation interface.
+     * @param memScanner A pointer to a `KittyScannerMgr` object.
+     * @param elfScanner A pointer to an `ElfScannerMgr` object.
+     */
     NativeBridgeScannerMgr(IKittyMemOp *pMem, KittyScannerMgr *memScanner, ElfScannerMgr *elfScanner);
 
+    /**
+     * @brief Initializes the native bridge scanner.
+     * @return True if initialization is successful, false otherwise.
+     */
     bool init();
 
+    /**
+     * @brief Returns true if initialized, false otherwise.
+     */
     inline bool isValid() const
     {
         return _init;
     }
 
+    /**
+     * @brief Returns the soinfo offsets.
+     */
     inline kitty_soinfo_offsets_t soinfo_offsets() const
     {
         return _soinfo_offsets;
     }
 
+    /**
+     * @brief Getter for 'libnativebridge.so' Elf.
+     */
     inline ElfScanner &nbElf()
     {
         return _nbElf;
     }
 
+    /**
+     * @brief Getter for the native bridge implementaion Elf (e.g, 'libhoudini.so' or 'libndk_translation.so').
+     */
     inline ElfScanner &nbImplElf()
     {
         return _nbImplElf;
     }
+
+    /**
+     * @brief Getter for the emulated 'libdl.so' Elf.
+     */
     inline ElfScanner &sodlElf()
     {
         return _sodlElf;
     }
 
+    /**
+     * @brief Check if the native bridge implementaion is Houdini.
+     */
     inline bool isHoudini() const
     {
         return _isHoudini;
     }
 
+    /**
+     * @brief Returns the emulated libdl.so address.
+     */
     inline uintptr_t sodl() const
     {
         return _sodl;
     }
 
+    /**
+     * @brief Returns the emulated libdl.so soinfo.
+     */
     inline kitty_soinfo_t sodlInfo() const
     {
         if (!_pMem || !_sodl)
@@ -709,15 +1040,29 @@ public:
         return infoFromSoInfo_(_sodl, KittyMemoryEx::getAllMaps(_pMem->processID()));
     }
 
+    /**
+     * @brief Returns all emulated soinfo.
+     */
     std::vector<kitty_soinfo_t> allSoInfo() const;
 
+    /**
+     * @brief Finds a soinfo by name.
+     * @param name The name of the soinfo.
+     * @return The soinfo if found or empty object.
+     */
     kitty_soinfo_t findSoInfo(const std::string &name) const;
 
+    /**
+     * @brief Returns native bridge callbacks data size.
+     */
     inline size_t nbItfDataSize() const
     {
         return _nbItf_data_size;
     }
 
+    /**
+     * @brief Returns native bridge callbacks data.
+     */
     inline nbItf_data_t nbItfData() const
     {
         return _nbItf_data;
