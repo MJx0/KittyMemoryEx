@@ -2,6 +2,9 @@
 
 #include "KittyUtils.hpp"
 
+/**
+ * @brief Provides utility functions for process memory.
+ */
 namespace KittyMemoryEx
 {
     /**
