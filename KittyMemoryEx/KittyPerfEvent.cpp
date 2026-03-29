@@ -3,7 +3,7 @@
 bool KittyPerfWatch::add(pid_t tid, uintptr_t addr, KT_WATCH_TYPE bp_type, KT_WATCH_LEN bp_len)
 {
 #if defined(__arm__) || defined(__aarch64__)
-    addr &= ~3;
+    addr &= ~3UL;
 #endif
 
     perf_event_attr pe{};
