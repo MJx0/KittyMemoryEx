@@ -1611,7 +1611,7 @@ NativeBridgeScannerMgr::NativeBridgeScannerMgr(IKittyMemOp *pMem,
     _memScanner = memScanner;
     _elfScanner = elfScanner;
 
-    _sodl = 0;
+    _sohead = 0;
 
     _nbItf = 0;
     _nbItf_data_size = 0;
@@ -1709,10 +1709,41 @@ bool NativeBridgeScannerMgr::init()
             *(uintptr_t *)&_nbItf_data.getTrampoline = pGetTrampoline;
     }
 
-    _sodlElf = _elfScanner->findElf("/libdl.so", EScanElfType::Emulated, EScanElfFilter::System);
-    if (!_sodlElf.isValid())
+    auto emuElfs = _elfScanner->getAllELFs(EScanElfType::Emulated);
+    if (emuElfs.empty())
     {
-        KITTY_LOGD("NativeBridgeScanner: Failed to find emulated libdl.so");
+        KITTY_LOGD("NativeBridgeScanner: Failed to find any loaded emulated so");
+        return false;
+    }
+
+    if (KittyUtils::getAndroidSDK() >= 24)
+    {
+        if (_isHoudini)
+        {
+            _soheadElf = _elfScanner->findElf("/libdl.so", EScanElfType::Emulated, EScanElfFilter::System);
+        }
+        else
+        {
+            static const char *heads[] = {"/app_process", "/app_process64", "/libdl.so"};
+            for (auto &it : heads)
+            {
+                auto elf = _elfScanner->findElf(it, EScanElfType::Emulated, EScanElfFilter::System);
+                if (elf.isValid())
+                {
+                    _soheadElf = elf;
+                    break;
+                }
+            }
+        }
+    }
+    else
+    {
+        _soheadElf = emuElfs[0];
+    }
+
+    if (!_soheadElf.isValid())
+    {
+        KITTY_LOGD("NativeBridgeScanner: Failed to validate the first emulated so");
         return false;
     }
 
@@ -1722,55 +1753,58 @@ bool NativeBridgeScannerMgr::init()
         size_t phnum = 0;
     } data;
 
+    data.phdr = _soheadElf.phdr();
+    data.phnum = _soheadElf.header().e_phnum;
 
-    data.phdr = _sodlElf.phdr();
-    data.phnum = _sodlElf.header().e_phnum;
-
-    KITTY_LOGD("NativeBridgeScanner: sodl phdr { %p, %zu }", (void *)(data.phdr), data.phnum);
+    KITTY_LOGD("NativeBridgeScanner: sohead phdr { %p, %zu }", (void *)(data.phdr), data.phnum);
 
     auto maps = KittyMemoryEx::getAllMaps(_pMem->processID());
 
-    // search in bss frst
-    for (auto &it : _nbImplElf.bssSegments())
+    // search in bss first
+    for (auto &it : _nbImplElf.segments())
     {
-        _sodl = _memScanner->findDataFirst(it.startAddress, it.endAddress, &data, sizeof(data));
-        if (_sodl)
+        if (it.is_rw)
         {
-            KITTY_LOGD("NativeBridgeScanner: Found sodl->phdr ref (%p) at %s", (void *)_sodl, it.toString().c_str());
-            break;
-        }
-    }
-
-    if (_sodl == 0)
-    {
-        // search in read-only "[anon:Mem_" or "[anon:linker_alloc]"
-        for (auto &it : maps)
-        {
-            if (!it.is_private || !it.is_ro || it.inode != 0)
-                continue;
-
-            if (!KittyUtils::String::startsWith(it.pathname, "[anon:Mem_") && it.pathname != "[anon:linker_alloc]")
-                continue;
-
-            _sodl = _memScanner->findDataFirst(it.startAddress, it.endAddress, &data, sizeof(data));
-            if (_sodl)
+            _sohead = _memScanner->findDataFirst(it.startAddress, it.endAddress, &data, sizeof(data));
+            if (_sohead)
             {
-                KITTY_LOGD("NativeBridgeScanner: Found sodl->phdr ref (%p) at %s",
-                           (void *)_sodl,
+                KITTY_LOGD("NativeBridgeScanner: Found sohead->phdr ref (%p) at %s",
+                           (void *)_sohead,
                            it.toString().c_str());
                 break;
             }
         }
     }
 
-    if (_sodl == 0)
+    if (_sohead == 0)
     {
-        KITTY_LOGD("NativeBridgeScanner: Failed to find refs to emulated libdl.so phdr data");
+        // search in "[anon:Mem_" or "[anon:linker_alloc]"
+        for (auto &it : maps)
+        {
+            bool check1 = (it.readable && KittyUtils::String::startsWith(it.pathname, "[anon:Mem_"));
+            bool check2 = (it.readable && it.pathname == "[anon:linker_alloc]");
+            if (!check1 && !check2)
+                continue;
+
+            _sohead = _memScanner->findDataFirst(it.startAddress, it.endAddress, &data, sizeof(data));
+            if (_sohead)
+            {
+                KITTY_LOGD("NativeBridgeScanner: Found sohead->phdr ref (%p) at %s",
+                           (void *)_sohead,
+                           it.toString().c_str());
+                break;
+            }
+        }
+    }
+
+    if (_sohead == 0)
+    {
+        KITTY_LOGD("NativeBridgeScanner: Failed to find refs to emulated sohead phdr data");
         return false;
     }
 
     std::vector<char> si_buf(KT_SOINFO_BUFFER_SZ, 0);
-    _pMem->Read(_sodl, si_buf.data(), KT_SOINFO_BUFFER_SZ);
+    _pMem->Read(_sohead, si_buf.data(), KT_SOINFO_BUFFER_SZ);
 
     for (size_t i = 0; i < si_buf.size(); i += sizeof(uintptr_t))
     {
@@ -1855,7 +1889,7 @@ bool NativeBridgeScannerMgr::init()
             _soinfo_offsets.strtab)
         {
             // phdr offset might not be 0
-            _sodl -= _soinfo_offsets.phdr;
+            _sohead -= _soinfo_offsets.phdr;
             _soinfo_offsets.next = _soinfo_offsets.phdr + i;
             break;
         }
@@ -1888,7 +1922,7 @@ std::vector<kitty_soinfo_t> NativeBridgeScannerMgr::allSoInfo() const
         return infos;
 
     auto maps = KittyMemoryEx::getAllMaps(_pMem->processID());
-    uintptr_t si = _sodl, prev = 0;
+    uintptr_t si = _sohead, prev = 0;
     while (si && KittyMemoryEx::getAddressMap(_pMem->processID(), si, maps).readable)
     {
         kitty_soinfo_t info = infoFromSoInfo_(si, maps);
@@ -1941,7 +1975,7 @@ kitty_soinfo_t NativeBridgeScannerMgr::infoFromSoInfo_(uintptr_t si,
     info.strsz = _soinfo_offsets.strsz ? *(uintptr_t *)(si_buf.data() + _soinfo_offsets.strsz) : 0;
     info.bias = *(uintptr_t *)(si_buf.data() + _soinfo_offsets.bias);
     info.next = *(uintptr_t *)(si_buf.data() + _soinfo_offsets.next);
-    info.e_machine = _sodlElf.header().e_machine;
+    info.e_machine = _soheadElf.header().e_machine;
 
     uintptr_t start_map_addr = info.base;
     if (start_map_addr == 0)

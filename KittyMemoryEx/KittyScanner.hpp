@@ -938,8 +938,8 @@ private:
     IKittyMemOp *_pMem;
     KittyScannerMgr *_memScanner;
     ElfScannerMgr *_elfScanner;
-    ElfScanner _nbElf, _nbImplElf, _sodlElf;
-    uintptr_t _sodl;
+    ElfScanner _nbElf, _nbImplElf, _soheadElf;
+    uintptr_t _sohead;
     kitty_soinfo_offsets_t _soinfo_offsets;
     bool _init;
     bool _isHoudini;
@@ -952,7 +952,7 @@ public:
     bool (*fnNativeBridgeInitialized)();
 
     NativeBridgeScannerMgr()
-        : _pMem(nullptr), _memScanner(nullptr), _elfScanner(nullptr), _sodl(0), _init(false), _isHoudini(false),
+        : _pMem(nullptr), _memScanner(nullptr), _elfScanner(nullptr), _sohead(0), _init(false), _isHoudini(false),
           _nbItf(0), _nbItf_data_size(0), fnNativeBridgeInitialized(nullptr)
     {
         memset(&_nbItf_data, 0, sizeof(_nbItf_data));
@@ -1008,9 +1008,9 @@ public:
     /**
      * @brief Getter for the emulated 'libdl.so' Elf.
      */
-    inline ElfScanner &sodlElf()
+    inline ElfScanner &soheadElf()
     {
-        return _sodlElf;
+        return _soheadElf;
     }
 
     /**
@@ -1022,22 +1022,22 @@ public:
     }
 
     /**
-     * @brief Returns the emulated libdl.so address.
+     * @brief Returns the first loaded emulated so address.
      */
-    inline uintptr_t sodl() const
+    inline uintptr_t sohead() const
     {
-        return _sodl;
+        return _sohead;
     }
 
     /**
      * @brief Returns the emulated libdl.so soinfo.
      */
-    inline kitty_soinfo_t sodlInfo() const
+    inline kitty_soinfo_t soheadInfo() const
     {
-        if (!_pMem || !_sodl)
+        if (!_pMem || !_sohead)
             return {};
 
-        return infoFromSoInfo_(_sodl, KittyMemoryEx::getAllMaps(_pMem->processID()));
+        return infoFromSoInfo_(_sohead, KittyMemoryEx::getAllMaps(_pMem->processID()));
     }
 
     /**
