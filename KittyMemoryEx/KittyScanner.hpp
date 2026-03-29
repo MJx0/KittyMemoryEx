@@ -1006,7 +1006,7 @@ public:
     }
 
     /**
-     * @brief Getter for the emulated 'libdl.so' Elf.
+     * @brief Getter for the first loaded emulated so Elf.
      */
     inline ElfScanner &soheadElf()
     {
@@ -1030,7 +1030,7 @@ public:
     }
 
     /**
-     * @brief Returns the emulated libdl.so soinfo.
+     * @brief Returns the first loaded emulated soinfo.
      */
     inline kitty_soinfo_t soheadInfo() const
     {
