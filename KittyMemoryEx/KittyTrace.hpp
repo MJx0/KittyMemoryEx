@@ -8,6 +8,7 @@
 #include <sys/user.h>
 #include <cerrno>
 #include <functional>
+#include <type_traits>
 
 #include "KittyUtils.hpp"
 #include "KittyMemoryEx.hpp"
@@ -66,32 +67,99 @@
 
 #endif
 
-enum KT_TRAP_TYPE
+/**
+ * @brief Enum for remote process call esults
+ */
+enum KT_RP_CALL_STATUS
 {
-    KT_TRAP_EXECUTE = 0,
-    KT_TRAP_READ,
-    KT_TRAP_WRITE,
-    KT_TRAP_ACCESS
+    KT_RP_CALL_FAILED,
+    KT_RP_CALL_SUCCESS,
+    KT_RP_CALL_TIMEOUT,
+    KT_RP_CALL_EXITED,
+    KT_RP_CALL_CONT_FAILED,
+    KT_RP_CALL_REGS_FAILED,
+    KT_RP_CALL_WAIT_FAILED,
+    KT_RP_CALL_MEM_FAILED,
+    KT_RP_CALL_STEP_FAILED,
+    KT_RP_CALL_NOT_STOPPED,
+    KT_RP_CALL_MISMATCH_STOP,
 };
 
+/**
+ * @brief Enum for hard break/watch point types
+ */
+enum KT_HW_BP_TYPE
+{
+    KT_HW_BP_EXECUTE = 0,
+    KT_HW_BP_READ,
+    KT_HW_BP_WRITE,
+    KT_HW_BP_ACCESS
+};
+
+/**
+ * @brief Enum for hard break/watch point sizes
+ */
+enum KT_HW_BP_SIZE
+{
+    KT_HW_BP_SIZE_EXEC = 0,
+    KT_HW_BP_SIZE_1 = 1,
+    KT_HW_BP_SIZE_2 = 2,
+    KT_HW_BP_SIZE_3 = 3,
+    KT_HW_BP_SIZE_4 = 4,
+    KT_HW_BP_SIZE_5 = 5,
+    KT_HW_BP_SIZE_6 = 6,
+    KT_HW_BP_SIZE_7 = 7,
+    KT_HW_BP_SIZE_8 = 8,
+};
+
+/**
+ * @brief Enum for break/watch point results
+ */
+enum KT_BP_RESULT
+{
+    KT_BP_FAILED,
+    KT_BP_SUCCESS,
+    KT_BP_TIMEOUT,
+    KT_BP_EXITED,
+    KT_BP_CONT_FAILED,
+    KT_BP_STEP_FAILED,
+    KT_BP_REGS_FAILED,
+    KT_BP_WAIT_FAILED,
+    KT_BP_MEM_FAILED,
+    KT_BP_NOT_STOPPED,
+    KT_BP_MISMATCH_STOP,
+};
+
+/**
+ * @brief Provides some asm instructions that are useful for KittyTrace class.
+ */
 namespace KittyTraceInsns
 {
 #if defined(__aarch64__)
-    static constexpr uint8_t brkTrapInsn[] = {0x00, 0x00, 0x20, 0xd4};
-    static constexpr uint8_t syscallInsn[] = {0x01, 0x00, 0x00, 0xd4};
-    static constexpr uint8_t nopInsn[] = {0x1f, 0x20, 0x03, 0xd5};
+    static constexpr int EXEC_SIZE = 4;
+    static constexpr uint8_t BRKP[] = {0x00, 0x00, 0x20, 0xd4};
+    static constexpr uint8_t SYSCALL[] = {0x01, 0x00, 0x00, 0xd4};
+    static constexpr uint8_t NOP[] = {0x1f, 0x20, 0x03, 0xd5};
 #elif defined(__arm__)
-    static constexpr uint8_t brkTrapInsn[] = {0x70, 0x00, 0x20, 0xe1};
-    static constexpr uint8_t syscallInsn[] = {0x00, 0x00, 0x00, 0xef};
-    static constexpr uint8_t nopInsn[] = {0x00, 0xf0, 0x20, 0xe3};
+    static constexpr int THUMB_EXEC_SIZE = 2;
+    static constexpr uint8_t THUMB_BRKP[] = {0x00, 0xbe};
+    static constexpr uint8_t THUMB_SYSCALL[] = {0x00, 0xdf};
+    static constexpr uint8_t THUMB_NOP[] = {0x00, 0xbf};
+
+    static constexpr int EXEC_SIZE = 4;
+    static constexpr uint8_t BRKP[] = {0x70, 0x00, 0x20, 0xe1};
+    static constexpr uint8_t SYSCALL[] = {0x00, 0x00, 0x00, 0xef};
+    static constexpr uint8_t NOP[] = {0x00, 0xf0, 0x20, 0xe3};
 #elif defined(__x86_64__)
-    static constexpr uint8_t brkTrapInsn[] = {0xcc};
-    static constexpr uint8_t syscallInsn[] = {0x0f, 0x05};
-    static constexpr uint8_t nopInsn[] = {0x90};
+    static constexpr int EXEC_SIZE = 1;
+    static constexpr uint8_t BRKP[] = {0xcc};
+    static constexpr uint8_t SYSCALL[] = {0x0f, 0x05};
+    static constexpr uint8_t NOP[] = {0x90};
 #elif defined(__i386__)
-    static constexpr uint8_t brkTrapInsn[] = {0xcc};
-    static constexpr uint8_t syscallInsn[] = {0xcd, 0x80};
-    static constexpr uint8_t nopInsn[] = {0x90};
+    static constexpr int EXEC_SIZE = 1;
+    static constexpr uint8_t BRKP[] = {0xcc};
+    static constexpr uint8_t SYSCALL[] = {0xcd, 0x80};
+    static constexpr uint8_t NOP[] = {0x90};
 #endif
 } // namespace KittyTraceInsns
 
@@ -103,6 +171,19 @@ namespace KittyTraceInsns
 #define KT_ALIGN_STACK_N(s, n) s = uintptr_t(intptr_t((intptr_t(s) - intptr_t(n)) & intptr_t(~0xF)))
 
 /**
+ * @brief A structure to hold result data of a remote process function call.
+ */
+struct kitty_rp_call_t
+{
+    KT_RP_CALL_STATUS status = KT_RP_CALL_FAILED;
+    union
+    {
+        intptr_t val = 0;
+        uintptr_t ptr;
+    } result;
+};
+
+/**
  * @brief A class for tracing and controlling the execution of processes in a debugging environment.
  */
 class KittyTraceMgr
@@ -110,13 +191,13 @@ class KittyTraceMgr
 private:
     pid_t _pid;
     uintptr_t _defaultCaller;
-    bool _attached, _autoRestoreRegs;
+    bool _attached, _seized, _autoRestoreRegs;
 
-    uintptr_t _callFunctionFrom(uintptr_t callerAddress, uintptr_t functionAddress, int nargs, ...);
-    intptr_t _callSyscall(long sysnr, int nargs, ...);
+    kitty_rp_call_t _callFunctionFrom(uintptr_t callerAddress, uintptr_t functionAddress, int nargs, ...);
+    kitty_rp_call_t _callSyscall(long sysnr, int nargs, ...);
 
 public:
-    KittyTraceMgr() : _pid(0), _defaultCaller(0), _attached(false), _autoRestoreRegs(true)
+    KittyTraceMgr() : _pid(0), _defaultCaller(0), _attached(false), _seized(false), _autoRestoreRegs(true)
     {
     }
 
@@ -128,7 +209,8 @@ public:
      * @param autoRestoreRegs Whether to automatically restore registers on remote function calls (optional).
      */
     KittyTraceMgr(pid_t pid, uintptr_t defaultCaller = 0, bool autoRestoreRegs = true)
-        : _pid(pid), _defaultCaller(defaultCaller), _attached(isAttached()), _autoRestoreRegs(autoRestoreRegs)
+        : _pid(pid), _defaultCaller(defaultCaller), _attached(isAttached()), _seized(false),
+          _autoRestoreRegs(autoRestoreRegs)
     {
     }
 
@@ -188,13 +270,32 @@ public:
     bool detach();
 
     /**
-     * @brief Interrupt the process.
-     * @return True if the interrupt was successful, false otherwise.
+     * @brief Stop all of traced process threads.
+     * @return True if the stop was successful, false otherwise.
      */
-    bool interrupt();
+    inline bool stopAllThreads()
+    {
+        return kill(_pid, SIGSTOP) != -1;
+    }
 
     /**
-     * @brief Continue the process.
+     * @brief Continue all of the traced process threads.
+     * @param sig Signal to send to the process (optional).
+     * @return True if the continue was successful, false otherwise.
+     */
+    inline bool contAllThreads()
+    {
+        return kill(_pid, SIGCONT) != -1;
+    }
+
+    /**
+     * @brief Stop the traced process thread.
+     * @return True if the stop was successful, false otherwise.
+     */
+    bool stop();
+
+    /**
+     * @brief Continue the traced process thread.
      * @param sig Signal to send to the process (optional).
      * @return True if the continue was successful, false otherwise.
      */
@@ -204,11 +305,33 @@ public:
      * @brief Wait for the process.
      * @param status Pointer to store the status of the process.
      * @param options waitpid options to use.
+     * @param timeout_ms timeout in milliseconds (optional, default is 0)
      * @return The PID of the process.
      */
-    inline pid_t wait(int *status, int options) const
+    inline pid_t wait(int *status, int options, int timeout_ms = 0) const
     {
-        return _attached ? waitpid(_pid, status, options) : -1;
+        if (!_attached)
+            return -1;
+
+        if (timeout_ms <= 0)
+            return waitpid(_pid, status, options);
+
+        int elapsed = 0;
+        pid_t res;
+        if (!(options & WNOHANG))
+            options |= WNOHANG;
+
+        while (elapsed < timeout_ms)
+        {
+            res = waitpid(_pid, status, options);
+            if (res != 0)
+                return res;
+
+            usleep(25000);
+            elapsed += 25;
+        }
+
+        return res;
     }
 
     /**
@@ -219,10 +342,17 @@ public:
 
     /**
      * @brief Single-step the process.
-     * @param steps Number of steps to single-step.
+     * @param steps Number of steps to single-step (default is 1).
      * @return True if the step was successful, false otherwise.
      */
     bool step(int steps = 1) const;
+
+    /**
+     * @brief Single-step and wait the process.
+     * @param steps Number of steps to single-step (default is 1).
+     * @return True if the step was successful, false otherwise.
+     */
+    bool waitStep(int steps = 1) const;
 
     /**
      * @brief Get the signal information of the process.
@@ -251,22 +381,106 @@ public:
     bool setRegs(user_regs_struct *regs) const;
 
     /**
-     * @brief Read memory from the remote process.
-     * @param addr Address to read from.
-     * @param buf Buffer to store the read data.
-     * @param size Size of the data to read.
-     * @return True if the read was successful, false otherwise.
+     * @brief Get the return address value from registers.
+     * @param regs Pointer to the registers.
+     * @return Value of the return address.
      */
-    bool peekMem(uintptr_t addr, void *buf, size_t size) const;
+    uintptr_t getReturnAddressFromRegs(user_regs_struct *regs)
+    {
+#if defined(__x86_64__) || defined(__i386__)
+        uintptr_t ret = 0;
+        peekMem(regs->KT_REG_SP, &ret, sizeof(uintptr_t));
+        return ret;
+
+#elif defined(__aarch64__) || defined(__arm__)
+        return regs->KT_REG_LR;
+#endif
+    }
 
     /**
-     * @brief Write memory to the remote process.
-     * @param addr Address to write to.
+     * @brief Get the n-th argument value from registers.
+     * @param regs Pointer to the registers.
+     * @param arg_num  The zero-indexed argument number (0 for 1st arg, 1 for 2nd, etc.).
+     * @return Value of the requested argument.
+     *
+     * @note T must be a numeric type.
+     */
+    template <typename T>
+    T getArgFromRegs(user_regs_struct *regs, uint32_t arg_num)
+    {
+        static_assert(std::is_arithmetic<T>::value, "T must be a numeric type!");
+
+#if defined(__x86_64__)
+        switch (arg_num)
+        {
+        case 0:
+            return regs->rdi;
+        case 1:
+            return regs->rsi;
+        case 2:
+            return regs->rdx;
+        case 3:
+            return regs->rcx;
+        case 4:
+            return regs->r8;
+        case 5:
+            return regs->r9;
+        default:
+            break;
+        }
+
+        uintptr_t arg = 0;
+        peekMem(regs->KT_REG_SP + 8 + (arg_num - 6) * 8, &arg, sizeof(uintptr_t));
+        return arg;
+
+#elif defined(__i386__)
+        uintptr_t arg = 0;
+        peekMem(regs->KT_REG_SP + 4 + (arg_num * 4), &arg, sizeof(uintptr_t));
+        return arg;
+
+#elif defined(__aarch64__)
+        if (arg_num < 8)
+            return regs->regs[arg_num];
+
+        uintptr_t arg = 0;
+        peekMem(regs->KT_REG_SP + (arg_num - 8) * 8, &arg, sizeof(uintptr_t));
+        return arg;
+
+#elif defined(__arm__)
+        if (arg_num < 4)
+            return regs->uregs[arg_num];
+
+        uintptr_t arg = 0;
+        peekMem(regs->KT_REG_SP + (arg_num - 4) * 4, &arg, sizeof(uintptr_t));
+        return arg;
+#endif
+    }
+
+    /**
+     * @brief Reads memory from a traced process using PTRACE_PEEKTEXT.
+     * Works around ptrace's word-sized limitation by reading aligned
+     * machine words and copying only the requested byte ranges.
+     *
+     * @param addr Remote address to read from.
+     * @param buf Buffer to store the read data.
+     * @param size Size of the data to read.
+     *
+     * @return Bytes read.
+     */
+    size_t peekMem(uintptr_t addr, void *buf, size_t size) const;
+
+    /**
+     * @brief Writes memory from a traced process using PTRACE_POKETEXT.
+     * Works around ptrace's word-sized limitation by reading aligned
+     * machine words and copying only the requested byte ranges.
+     *
+     * @param addr Remote address to write to.
      * @param buf Buffer containing the data to write.
      * @param size Size of the data to write.
-     * @return True if the write was successful, false otherwise.
+     *
+     * @return Bytes written.
      */
-    bool pokeMem(uintptr_t addr, const void *buf, size_t size) const;
+    size_t pokeMem(uintptr_t addr, const void *buf, size_t size) const;
 
     /**
      * @brief Returns the default caller address for remote function calls.
@@ -310,7 +524,7 @@ public:
      * @return The address of the return value.
      */
     template <class... Args>
-    uintptr_t callFunctionFrom(uintptr_t callerAddress, uintptr_t functionAddress, Args &&...a)
+    kitty_rp_call_t callFunctionFrom(uintptr_t callerAddress, uintptr_t functionAddress, Args &&...a)
     {
         return _callFunctionFrom(callerAddress, functionAddress, sizeof...(a), std::forward<Args>(a)...);
     }
@@ -322,15 +536,11 @@ public:
      * @return The address of the return value.
      */
     template <class... Args>
-    uintptr_t callFunction(uintptr_t functionAddress, Args &&...a)
+    kitty_rp_call_t callFunction(uintptr_t functionAddress, Args &&...a)
     {
         return _callFunctionFrom(_defaultCaller, functionAddress, sizeof...(a), std::forward<Args>(a)...);
     }
 
-    /**
-     * Call remote syscall
-     * Write syscall + brkp at PC (PC MUST BE VALID)
-     */
     /**
      * @brief Call a syscall in the remote process.
      * @note This function writes syscall + brkp instructions at PC/IP so PC/IP must be at valid executable address.
@@ -339,7 +549,7 @@ public:
      * @return The result of the syscall.
      */
     template <class... Args>
-    intptr_t callSyscall(long sysnr, Args &&...a)
+    kitty_rp_call_t callSyscall(long sysnr, Args &&...a)
     {
         return _callSyscall(sysnr, sizeof...(a), std::forward<Args>(a)...);
     }
@@ -348,18 +558,51 @@ public:
      * @brief Sets and wait for software breakpoint at a given address.
      * @param address The address to set the breakpoint at.
      * @param cb Callback function to be executed when the breakpoint is hit.
-     * @return True if the breakpoint was set and triggered successfully, false otherwise.
+     * @param timeout_ms timeout in milliseconds (0 or negative value, will disable timeout)
+     * @return Value of KT_BP_RESULT enum.
+     *
+     * @note Breakpoint will be set into on traced thread.
      */
-    bool softTrapWait(uintptr_t address, const std::function<bool(user_regs_struct regs)> &cb);
+    KT_BP_RESULT setSoftBreakpointAndWait(uintptr_t address,
+                                          const std::function<bool(user_regs_struct regs)> &cb,
+                                          int timeout_ms);
 
-#if 0
-     /**
+    /**
      * @brief Sets and wait for hardware breakpoint at a given address.
      * @param address The address to set the breakpoint at.
+     * @param type The type of hardware breakpoint (e.g., execute, read, write, access).
+     * @param size The size of the data to watch (ignored if bp type is KT_HW_BP_EXECUTE).
+     * @param slot The slot number for the breakpoint.
      * @param cb Callback function to be executed when the breakpoint is hit.
-     * @return True if the breakpoint was set and triggered successfully, false otherwise.
+     * @param timeout_ms Timeout in milliseconds (0 or negative value, will disable timeout)
+     * @return Value of KT_BP_RESULT enum.
+     *
+     * @note Breakpoint will be set into slot 0 on traced thread.
      */
-    bool hardTrapWait(uintptr_t address, size_t size, KT_TRAP_TYPE type,
-                    const std::function<bool(user_regs_struct regs)> &cb);
-#endif
+    KT_BP_RESULT setHardBreakpointAndWait(uintptr_t address,
+                                          KT_HW_BP_TYPE type,
+                                          KT_HW_BP_SIZE size,
+                                          int slot,
+                                          const std::function<bool(user_regs_struct regs)> &cb,
+                                          int timeout_ms);
+
+    /**
+     * @brief Sets a hardware breakpoint on a specified address for traced thread.
+     *
+     * @param address The address to set the breakpoint at.
+     * @param type The type of hardware breakpoint (e.g., execute, read, write, access).
+     * @param size The size of the data to watch (ignored if bp type is KT_HW_BP_EXECUTE).
+     * @param slot The slot number for the breakpoint.
+     * @return True if the breakpoint was successfully set, false otherwise.
+     */
+    bool setHwBreakpoint(uintptr_t address, KT_HW_BP_TYPE type, KT_HW_BP_SIZE size, int slot);
+
+    /**
+     * @brief Clears a hardware breakpoint on a specified address for traced thread.
+     *
+     * @param type The type of hardware breakpoint (e.g., execute, read, write, access).
+     * @param slot The slot number for the breakpoint.
+     * @return True if the breakpoint was successfully cleared, false otherwise.
+     */
+    bool clearHwBreakpoint(KT_HW_BP_TYPE type, int slot);
 };

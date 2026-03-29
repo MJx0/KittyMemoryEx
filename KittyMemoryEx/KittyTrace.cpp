@@ -18,6 +18,8 @@ bool KittyTraceMgr::attach(int options)
         return false;
     }
 
+    _seized = false;
+
     int status;
     if (waitpid(_pid, &status, 0) != _pid || !WIFSTOPPED(status))
     {
@@ -52,6 +54,7 @@ bool KittyTraceMgr::seize(int options)
         return false;
     }
 
+    _seized = true;
     _attached = true;
 
     return true;
@@ -76,6 +79,13 @@ bool KittyTraceMgr::detach()
     if (!isAttached())
         return true;
 
+    while (true)
+    {
+        int status = 0;
+        if (waitpid(_pid, &status, __WALL | WNOHANG) <= 0)
+            break;
+    }
+
     errno = 0;
     if (ptrace(PTRACE_DETACH, _pid, nullptr, nullptr) == -1L)
     {
@@ -83,19 +93,38 @@ bool KittyTraceMgr::detach()
         return false;
     }
 
+    while (true)
+    {
+        int status = 0;
+        if (waitpid(_pid, &status, __WALL | WNOHANG) <= 0)
+            break;
+    }
+
     return true;
 }
 
-bool KittyTraceMgr::interrupt()
+bool KittyTraceMgr::stop()
 {
     if (!_attached || _pid <= 0)
         return false;
 
     errno = 0;
-    if (ptrace(PTRACE_INTERRUPT, _pid, nullptr, nullptr) == -1L)
+
+    if (_seized)
     {
-        KITTY_LOGE("PTRACE_INTERRUPT failed for pid %d. \"%s\".", _pid, strerror(errno));
-        return false;
+        if (ptrace(PTRACE_INTERRUPT, _pid, nullptr, nullptr) == -1L)
+        {
+            KITTY_LOGE("PTRACE_INTERRUPT failed for pid %d. \"%s\".", _pid, strerror(errno));
+            return false;
+        }
+    }
+    else
+    {
+        if (tgkill(_pid, _pid, SIGSTOP) == -1)
+        {
+            KITTY_LOGE("tgkill failed for pid %d. \"%s\".", _pid, strerror(errno));
+            return false;
+        }
     }
 
     int status;
@@ -144,6 +173,32 @@ bool KittyTraceMgr::waitSyscall() const
 }
 
 bool KittyTraceMgr::step(int steps) const
+{
+    if (!_attached || _pid <= 0)
+        return false;
+
+    int status = 0;
+    for (int i = 0; i < steps; ++i)
+    {
+        errno = 0;
+        if (ptrace(PTRACE_SINGLESTEP, _pid, nullptr, nullptr) == -1L)
+        {
+            KITTY_LOGE("PTRACE_SINGLESTEP failed for pid %d. \"%s\".", _pid, strerror(errno));
+            return false;
+        }
+
+        if ((i + 1) < steps)
+        {
+            waitpid(_pid, &status, 0);
+            if (!WIFSTOPPED(status))
+                return false;
+        }
+    }
+
+    return true;
+}
+
+bool KittyTraceMgr::waitStep(int steps) const
 {
     if (!_attached || _pid <= 0)
         return false;
@@ -214,71 +269,75 @@ bool KittyTraceMgr::setRegs(user_regs_struct *regs) const
     return true;
 }
 
-bool KittyTraceMgr::peekMem(uintptr_t addr, void *buf, size_t size) const
+size_t KittyTraceMgr::peekMem(uintptr_t addr, void *buf, size_t size) const
 {
+    static constexpr size_t WORD_SIZE = sizeof(long);
+
     if (!_attached || _pid <= 0)
         return false;
 
-    long len = size / sizeof(long);
-    long nremain = size % sizeof(long);
-    uint8_t *cursrc = (uint8_t *)addr;
-    uint8_t *curdst = (uint8_t *)buf;
+    uint8_t *out = static_cast<uint8_t *>(buf);
+    size_t total = 0;
 
-    for (long i = 0; i < len; i++)
+    uintptr_t aligned_start = addr & ~(WORD_SIZE - 1);
+    uintptr_t aligned_end = (addr + size + WORD_SIZE - 1) & ~(WORD_SIZE - 1);
+
+    for (uintptr_t cur = aligned_start; cur < aligned_end; cur += WORD_SIZE)
     {
-        long rbuf = ptrace(PTRACE_PEEKTEXT, _pid, cursrc, nullptr);
-        if (rbuf == -1)
-            return false;
+        errno = 0;
+        long data = ptrace(PTRACE_PEEKDATA, _pid, (void *)cur, nullptr);
+        if (data == -1 && errno)
+            return total;
 
-        memcpy(curdst, (void *)(&rbuf), sizeof(long));
-        cursrc += sizeof(long);
-        curdst += sizeof(long);
+        size_t copy_start = (cur < addr) ? addr - cur : 0;
+        size_t copy_end = ((cur + WORD_SIZE) > (addr + size)) ? (addr + size) - cur : WORD_SIZE;
+        size_t copy_len = copy_end - copy_start;
+
+        memcpy(out + total, ((uint8_t *)&data) + copy_start, copy_len);
+        total += copy_len;
     }
 
-    if (nremain > 0)
-    {
-        long rbuf = ptrace(PTRACE_PEEKTEXT, _pid, cursrc, nullptr);
-        if (rbuf == -1)
-            return false;
-
-        memcpy(curdst, (char *)(&rbuf), nremain);
-    }
-
-    return true;
+    return total;
 }
 
-bool KittyTraceMgr::pokeMem(uintptr_t addr, const void *buf, size_t size) const
+size_t KittyTraceMgr::pokeMem(uintptr_t addr, const void *buf, size_t size) const
 {
+    static constexpr size_t WORD_SIZE = sizeof(long);
+
     if (!_attached || _pid <= 0)
         return false;
 
-    long count = size / sizeof(long);
-    long remain = size % sizeof(long);
-    const uint8_t *cursrc = (const uint8_t *)buf;
-    uint8_t *curdst = (uint8_t *)addr;
+    const uint8_t *in = static_cast<const uint8_t *>(buf);
+    size_t total = 0;
 
-    for (long i = 0; i < count; i++)
+    uintptr_t aligned_start = addr & ~(WORD_SIZE - 1);
+    uintptr_t aligned_end = (addr + size + WORD_SIZE - 1) & ~(WORD_SIZE - 1);
+
+    for (uintptr_t cur = aligned_start; cur < aligned_end; cur += WORD_SIZE)
     {
-        long rbuf = 0;
-        memcpy((void *)(&rbuf), cursrc, sizeof(long));
-        if (ptrace(PTRACE_POKETEXT, _pid, curdst, rbuf) == -1)
-            return false;
+        size_t write_start = (cur < addr) ? addr - cur : 0;
+        size_t write_end = ((cur + WORD_SIZE) > (addr + size)) ? (addr + size) - cur : WORD_SIZE;
+        size_t write_len = write_end - write_start;
 
-        cursrc += sizeof(long);
-        curdst += sizeof(long);
+        long data = 0;
+
+        if (write_len != WORD_SIZE)
+        {
+            errno = 0;
+            data = ptrace(PTRACE_PEEKDATA, _pid, (void *)cur, nullptr);
+            if (data == -1 && errno)
+                return total;
+        }
+
+        memcpy(((uint8_t *)&data) + write_start, in + total, write_len);
+
+        if (ptrace(PTRACE_POKEDATA, _pid, (void *)cur, data) == -1)
+            return total;
+
+        total += write_len;
     }
 
-    if (remain > 0)
-    {
-        long rbuf = ptrace(PTRACE_PEEKTEXT, _pid, curdst, nullptr);
-        if (rbuf == -1)
-            return false;
-
-        memcpy((void *)(&rbuf), cursrc, remain);
-        return ptrace(PTRACE_POKETEXT, _pid, curdst, rbuf) != -1;
-    }
-
-    return true;
+    return total;
 }
 
 // refs
@@ -287,10 +346,10 @@ bool KittyTraceMgr::pokeMem(uintptr_t addr, const void *buf, size_t size) const
 // https://github.com/shunix/TinyInjector
 // https://github.com/topjohnwu/Magisk/blob/master/native/src/zygisk/ptrace.cpp
 
-uintptr_t KittyTraceMgr::_callFunctionFrom(uintptr_t callerAddress, uintptr_t functionAddress, int nargs, ...)
+kitty_rp_call_t KittyTraceMgr::_callFunctionFrom(uintptr_t callerAddress, uintptr_t functionAddress, int nargs, ...)
 {
     if (!_attached || _pid <= 0 || functionAddress == 0)
-        return 0;
+        return {KT_RP_CALL_FAILED, {0}};
 
     user_regs_struct backup_regs, return_regs, tmp_regs;
     memset(&backup_regs, 0, sizeof(backup_regs));
@@ -301,7 +360,7 @@ uintptr_t KittyTraceMgr::_callFunctionFrom(uintptr_t callerAddress, uintptr_t fu
     if (!getRegs(&backup_regs))
     {
         KITTY_LOGE("callFunction(%p): Failed, couldn't get regs.", (void *)functionAddress);
-        return 0;
+        return {KT_RP_CALL_REGS_FAILED, {0}};
     }
 
     memcpy(&tmp_regs, &backup_regs, sizeof(backup_regs));
@@ -325,11 +384,11 @@ uintptr_t KittyTraceMgr::_callFunctionFrom(uintptr_t callerAddress, uintptr_t fu
     }
 
     // cleanup failure return
-    auto failure_return = [&]() -> uintptr_t {
+    auto failure_return = [&](KT_RP_CALL_STATUS s = KT_RP_CALL_FAILED) -> kitty_rp_call_t {
         KITTY_LOGE("callFunction(%p): Failed.", (void *)functionAddress);
         if (_autoRestoreRegs)
             setRegs(&backup_regs);
-        return 0;
+        return {s, {0}};
     };
 
     auto validate_ret = [this](const user_regs_struct &regs, uintptr_t return_addr) -> bool {
@@ -367,7 +426,7 @@ uintptr_t KittyTraceMgr::_callFunctionFrom(uintptr_t callerAddress, uintptr_t fu
     {
         KT_REGS_ALIGN_STACK_N(tmp_regs, sizeof(uintptr_t) * (nargs - KT_REG_ARGS_NUM));
         if (!pokeMem(tmp_regs.KT_REG_SP, &vargs[KT_REG_ARGS_NUM], sizeof(uintptr_t) * (nargs - KT_REG_ARGS_NUM)))
-            return failure_return();
+            return failure_return(KT_RP_CALL_MEM_FAILED);
     }
 
     // Set return address
@@ -398,13 +457,13 @@ uintptr_t KittyTraceMgr::_callFunctionFrom(uintptr_t callerAddress, uintptr_t fu
     {
         KT_REGS_ALIGN_STACK_N(tmp_regs, sizeof(uintptr_t) * nargs);
         if (!pokeMem(tmp_regs.KT_REG_SP, &vargs[0], nargs * sizeof(uintptr_t)))
-            return failure_return();
+            return failure_return(KT_RP_CALL_MEM_FAILED);
     }
 
     // Push return address onto stack
     tmp_regs.KT_REG_SP -= sizeof(uintptr_t);
     if (!pokeMem(tmp_regs.KT_REG_SP, &callerAddress, sizeof(uintptr_t)))
-        return failure_return();
+        return failure_return(KT_RP_CALL_MEM_FAILED);
 
     // Set function address to call
     tmp_regs.KT_REG_IP = functionAddress;
@@ -442,13 +501,13 @@ uintptr_t KittyTraceMgr::_callFunctionFrom(uintptr_t callerAddress, uintptr_t fu
     {
         KT_REGS_ALIGN_STACK_N(tmp_regs, sizeof(uintptr_t) * (nargs - KT_REG_ARGS_NUM));
         if (!pokeMem(tmp_regs.KT_REG_SP, &vargs[KT_REG_ARGS_NUM], sizeof(uintptr_t) * (nargs - KT_REG_ARGS_NUM)))
-            return failure_return();
+            return failure_return(KT_RP_CALL_MEM_FAILED);
     }
 
     // Push return address onto stack
     tmp_regs.KT_REG_SP -= sizeof(uintptr_t);
     if (!pokeMem(tmp_regs.KT_REG_SP, &callerAddress, sizeof(uintptr_t)))
-        return failure_return();
+        return failure_return(KT_RP_CALL_MEM_FAILED);
 
     // Set function address to call
     tmp_regs.KT_REG_IP = functionAddress;
@@ -461,9 +520,13 @@ uintptr_t KittyTraceMgr::_callFunctionFrom(uintptr_t callerAddress, uintptr_t fu
 #error "Unsupported ABI"
 #endif
 
-    // Set new registers and resume execution
-    if (!setRegs(&tmp_regs) || !cont())
-        return failure_return();
+    // Set new registers
+    if (!setRegs(&tmp_regs))
+        return failure_return(KT_RP_CALL_REGS_FAILED);
+
+    // Resume execution
+    if (!cont())
+        return failure_return(KT_RP_CALL_CONT_FAILED);
 
     // Catch SIGSEGV caused by our code
     do
@@ -474,96 +537,90 @@ uintptr_t KittyTraceMgr::_callFunctionFrom(uintptr_t callerAddress, uintptr_t fu
         if (wp != _pid)
         {
             KITTY_LOGE("callFunction(%p): waitpid return %d. \"%s\".", (void *)functionAddress, wp, strerror(errno));
-            return failure_return();
+            return failure_return(KT_RP_CALL_WAIT_FAILED);
         }
 
         if (WIFEXITED(status))
         {
             _attached = false;
             KITTY_LOGE("callFunction(%p): Target process exited (%d).", (void *)functionAddress, WEXITSTATUS(status));
-            return 0;
+            return {KT_RP_CALL_EXITED, {0}};
         }
 
         if (WIFSIGNALED(status))
         {
             _attached = false;
             KITTY_LOGE("callFunction(%p): Target process terminated (%d).", (void *)functionAddress, WTERMSIG(status));
-            return 0;
+            return {KT_RP_CALL_EXITED, {0}};
         }
 
         if (!WIFSTOPPED(status))
-        {
-            KITTY_LOGE("callFunction(%p): Target process didn't stop (status(0x%x)).",
-                       (void *)functionAddress,
-                       (status));
-            return failure_return();
-        }
+            continue;
 
-        if (WSTOPSIG(status) == SIGSTOP)
+        if (WSTOPSIG(status) == SIGCHLD || WSTOPSIG(status) == SIGSTOP || WSTOPSIG(status) == SIGTSTP)
         {
-            KITTY_LOGD("callFunction(%p): Cont...", (void *)functionAddress);
-
             if (!cont())
-                return failure_return();
+                return failure_return(KT_RP_CALL_CONT_FAILED);
 
             continue;
         }
 
         if (!getRegs(&return_regs))
-            return failure_return();
+            return failure_return(KT_RP_CALL_REGS_FAILED);
 
         KITTY_LOGD("callFunction(%p): Ok.", (void *)functionAddress);
 
-        if (!validate_ret(return_regs, callerAddress))
+        if (validate_ret(return_regs, callerAddress))
+            break;
+
+        KITTY_LOGE("callFunction(%p): Process didn't jump to specified return address (%p)",
+                   (void *)functionAddress,
+                   (void *)callerAddress);
+
+        KITTY_LOGE("callFunction(%p): PC(%p) | RET(%p).",
+                   (void *)functionAddress,
+                   (void *)(return_regs.KT_REG_PC),
+                   (void *)(return_regs.KT_REG_RET));
+
+        siginfo_t si = {};
+        getSignalInfo(&si);
+
+        KITTY_LOGE("callFunction(%p): SIG(%s) | CODE(%d) | ADDR(%p).",
+                   (void *)functionAddress,
+                   strsignal(si.si_signo),
+                   si.si_code,
+                   (void *)(si.si_addr));
+
+        auto map = KittyMemoryEx::getAddressMap(_pid, uintptr_t(si.si_addr));
+        if (map.isValid())
         {
-            KITTY_LOGE("callFunction(%p): Process didn't jump to specified return address (%p)",
+            KITTY_LOGE("callFunction(%p): MAP(<base>+%p) %s",
                        (void *)functionAddress,
-                       (void *)callerAddress);
-            KITTY_LOGE("callFunction(%p): PC(%p) | RET(%p).",
-                       (void *)functionAddress,
-                       (void *)(return_regs.KT_REG_PC),
-                       (void *)(return_regs.KT_REG_RET));
-
-            siginfo_t si = {};
-            getSignalInfo(&si);
-
-            KITTY_LOGE("callFunction(%p): SIG(%s) | CODE(%d) | ADDR(%p).",
-                       (void *)functionAddress,
-                       strsignal(si.si_signo),
-                       si.si_code,
-                       (void *)(si.si_addr));
-
-            auto map = KittyMemoryEx::getAddressMap(_pid, uintptr_t(si.si_addr));
-            if (map.isValid())
-            {
-                KITTY_LOGE("callFunction(%p): MAP(<base>+%p) %s",
-                           (void *)functionAddress,
-                           (void *)((map.offset + uintptr_t(si.si_addr)) - map.startAddress),
-                           map.toString().c_str());
-            }
-
-            return failure_return();
+                       (void *)((map.offset + uintptr_t(si.si_addr)) - map.startAddress),
+                       map.toString().c_str());
         }
 
-        break;
+        if (!cont(WSTOPSIG(status)))
+            return failure_return(KT_RP_CALL_CONT_FAILED);
 
+        return failure_return(KT_RP_CALL_MISMATCH_STOP);
     } while (true);
 
-    uintptr_t result = return_regs.KT_REG_RET;
+    kitty_rp_call_t result = {KT_RP_CALL_SUCCESS, {static_cast<intptr_t>(return_regs.KT_REG_RET)}};
 
     // Restore regs
     if (_autoRestoreRegs)
         setRegs(&backup_regs);
 
-    KITTY_LOGD("callFunction: Calling function %p returned %p.", (void *)functionAddress, (void *)result);
+    KITTY_LOGD("callFunction: Calling function %p returned %p.", (void *)functionAddress, (void *)result.result.ptr);
 
     return result;
 }
 
-intptr_t KittyTraceMgr::_callSyscall(long sysnr, int nargs, ...)
+kitty_rp_call_t KittyTraceMgr::_callSyscall(long sysnr, int nargs, ...)
 {
     if (!_attached || _pid <= 0)
-        return 0;
+        return {KT_RP_CALL_FAILED, {0}};
 
     user_regs_struct backup_regs, return_regs, tmp_regs;
     memset(&backup_regs, 0, sizeof(backup_regs));
@@ -574,7 +631,7 @@ intptr_t KittyTraceMgr::_callSyscall(long sysnr, int nargs, ...)
     if (!getRegs(&backup_regs))
     {
         KITTY_LOGE("callSyscall(%d): Failed, couldn't get regs.", int(sysnr));
-        return 0;
+        return {KT_RP_CALL_REGS_FAILED, {0}};
     }
 
     memcpy(&tmp_regs, &backup_regs, sizeof(backup_regs));
@@ -604,55 +661,36 @@ intptr_t KittyTraceMgr::_callSyscall(long sysnr, int nargs, ...)
                vargs[4],
                vargs[5]);
 
+    uintptr_t target_pc_mem = tmp_regs.KT_REG_PC;
+    std::vector<uint8_t> syscall_code;
+
 #if defined(__arm__)
-    tmp_regs.KT_REG_PC &= ~1u;
+    bool thumb = (target_pc_mem & 1) != 0 || (tmp_regs.KT_REG_CPSR & KT_CPSR_T_MASK) != 0;
+    target_pc_mem &= ~1;
+    if (thumb)
+        syscall_code.assign(std::begin(KittyTraceInsns::THUMB_SYSCALL), std::end(KittyTraceInsns::THUMB_SYSCALL));
+    else
+        syscall_code.assign(std::begin(KittyTraceInsns::SYSCALL), std::end(KittyTraceInsns::SYSCALL));
+#else
+    syscall_code.assign(std::begin(KittyTraceInsns::SYSCALL), std::end(KittyTraceInsns::SYSCALL));
 #endif
 
-    uintptr_t target_pc_mem = tmp_regs.KT_REG_PC;
-
-    std::vector<uint8_t> syscall_brk_code(std::begin(KittyTraceInsns::syscallInsn),
-                                          std::end(KittyTraceInsns::syscallInsn));
-    {
-        syscall_brk_code.insert(syscall_brk_code.end(),
-                                std::begin(KittyTraceInsns::brkTrapInsn),
-                                std::end(KittyTraceInsns::brkTrapInsn));
-        int remain = (int(sizeof(long)) - int(syscall_brk_code.size()));
-        if (remain > 0)
-        {
-            for (int i = 0; i < (remain / int(sizeof(KittyTraceInsns::nopInsn))); i++)
-                syscall_brk_code.insert(syscall_brk_code.end(),
-                                        std::begin(KittyTraceInsns::nopInsn),
-                                        std::end(KittyTraceInsns::nopInsn));
-        }
-    }
-
-    std::vector<uint8_t> backup_code(syscall_brk_code.size(), 0);
+    std::vector<uint8_t> backup_code(syscall_code.size(), 0);
     if (!peekMem(target_pc_mem, backup_code.data(), backup_code.size()))
     {
         KITTY_LOGE("callSyscall(%d): Failed to backup PC(%p) memory code.", int(sysnr), (void *)target_pc_mem);
-        return 0;
+        return {KT_RP_CALL_MEM_FAILED, {0}};
     }
 
     // cleanup failure return
-    auto failure_return = [&]() -> uintptr_t {
+    auto failure_return = [&](KT_RP_CALL_STATUS s = KT_RP_CALL_FAILED) -> kitty_rp_call_t {
         KITTY_LOGE("callSyscall(%d): Failed.", int(sysnr));
 
         if (_autoRestoreRegs)
             setRegs(&backup_regs);
 
         pokeMem(target_pc_mem, backup_code.data(), backup_code.size());
-        return 0;
-    };
-
-    auto validate_trap = [this](const user_regs_struct &regs, uintptr_t trap_addr) -> bool {
-        uintptr_t pc = regs.KT_REG_PC;
-        if (pc != trap_addr && pc != (trap_addr + sizeof(KittyTraceInsns::brkTrapInsn)))
-        {
-            siginfo_t si = {};
-            getSignalInfo(&si);
-            return uintptr_t(si.si_addr) == trap_addr;
-        }
-        return true;
+        return {s, {0}};
     };
 
 #if defined(__arm__) || defined(__aarch64__)
@@ -687,19 +725,23 @@ intptr_t KittyTraceMgr::_callSyscall(long sysnr, int nargs, ...)
 
     tmp_regs.KT_REG_SYSNR = sysnr;
 
-    if (!pokeMem(target_pc_mem, syscall_brk_code.data(), syscall_brk_code.size()))
+    if (!pokeMem(target_pc_mem, syscall_code.data(), syscall_code.size()))
     {
         KITTY_LOGE("callSyscall(%d): Failed to write syscall code into PC(%p) memory.",
                    int(sysnr),
                    (void *)target_pc_mem);
-        return 0;
+        return {KT_RP_CALL_MEM_FAILED, {0}};
     }
 
-    // Set new registers and resume execution
-    if (!setRegs(&tmp_regs) || !cont())
-        return failure_return();
+    // Set new registers
+    if (!setRegs(&tmp_regs))
+        return failure_return(KT_RP_CALL_REGS_FAILED);
 
-    // Catch SIGTRAP caused by our code
+    // Single step to execute syscall
+    if (!step())
+        return failure_return(KT_RP_CALL_STEP_FAILED);
+
+    // Wait for step
     do
     {
         errno = 0;
@@ -708,52 +750,41 @@ intptr_t KittyTraceMgr::_callSyscall(long sysnr, int nargs, ...)
         if (wp != _pid)
         {
             KITTY_LOGE("callSyscall(%d): waitpid returned %d. \"%s\".", int(sysnr), wp, strerror(errno));
-            return failure_return();
+            return failure_return(KT_RP_CALL_WAIT_FAILED);
         }
 
         if (WIFEXITED(status))
         {
             _attached = false;
             KITTY_LOGE("callSyscall(%d): Target process exited (%d).", int(sysnr), WEXITSTATUS(status));
-            return 0;
+            return {KT_RP_CALL_EXITED, {0}};
         }
 
         if (WIFSIGNALED(status))
         {
             _attached = false;
             KITTY_LOGE("callSyscall(%d): Target process terminated (%d).", int(sysnr), WTERMSIG(status));
-            return 0;
+            return {KT_RP_CALL_EXITED, {0}};
         }
 
         if (!WIFSTOPPED(status))
-        {
-            KITTY_LOGE("callSyscall(%d): Target process didn't stop (status(0x%X)).", int(sysnr), (status));
-            return failure_return();
-        }
+            continue;
 
-        if (WSTOPSIG(status) == SIGSTOP)
+        if (WSTOPSIG(status) == SIGCHLD || WSTOPSIG(status) == SIGSTOP || WSTOPSIG(status) == SIGTSTP)
         {
             if (!cont())
-                return failure_return();
+                return failure_return(KT_RP_CALL_CONT_FAILED);
 
             continue;
         }
 
         if (!getRegs(&return_regs))
-            return failure_return();
+            return failure_return(KT_RP_CALL_REGS_FAILED);
 
-        if (WSTOPSIG(status) == SIGTRAP)
-        {
-            uintptr_t trap_addr = tmp_regs.KT_REG_PC + sizeof(KittyTraceInsns::syscallInsn);
-            if (validate_trap(return_regs, trap_addr))
-                break;
+        if (return_regs.KT_REG_PC > tmp_regs.KT_REG_PC && return_regs.KT_REG_PC <= tmp_regs.KT_REG_PC + 16)
+            break;
 
-            KITTY_LOGE("callSyscall(%d): Process didn't stop at specified brkp (%p)", int(sysnr), (void *)trap_addr);
-        }
-        else
-        {
-            KITTY_LOGE("callSyscall(%d): Target process didn't stop with SIGTRAP", int(sysnr));
-        }
+        KITTY_LOGE("callSyscall(%d): Process didn't stop after syscall!", int(sysnr));
 
         KITTY_LOGE("callSyscall(%d): PC(%p) | RET(%p).",
                    int(sysnr),
@@ -778,11 +809,14 @@ intptr_t KittyTraceMgr::_callSyscall(long sysnr, int nargs, ...)
                        map.toString().c_str());
         }
 
-        return failure_return();
+        if (!cont(WSTOPSIG(status)))
+            return failure_return(KT_RP_CALL_CONT_FAILED);
+
+        return failure_return(KT_RP_CALL_MISMATCH_STOP);
 
     } while (true);
 
-    uintptr_t result = return_regs.KT_REG_RET;
+    kitty_rp_call_t result = {KT_RP_CALL_SUCCESS, {static_cast<intptr_t>(return_regs.KT_REG_RET)}};
 
     if (!pokeMem(target_pc_mem, backup_code.data(), backup_code.size()))
     {
@@ -793,17 +827,25 @@ intptr_t KittyTraceMgr::_callSyscall(long sysnr, int nargs, ...)
     if (_autoRestoreRegs)
         setRegs(&backup_regs);
 
-    KITTY_LOGD("callSyscall(%d): returned %p.", int(sysnr), (void *)result);
+    KITTY_LOGD("callSyscall(%d): returned %p.", int(sysnr), (void *)result.result.ptr);
     return result;
 }
 
-bool KittyTraceMgr::softTrapWait(uintptr_t address, const std::function<bool(user_regs_struct regs)> &cb)
+KT_BP_RESULT KittyTraceMgr::setSoftBreakpointAndWait(uintptr_t address,
+                                                     const std::function<bool(user_regs_struct regs)> &cb,
+                                                     int timeout_ms)
 {
     if (!_attached || _pid <= 0 || address == 0)
-        return 0;
+        return KT_BP_FAILED;
 
-#if defined(__arm__) || defined(__aarch64__)
-    address &= ~3;
+#if defined(__arm__)
+    bool thumb = address & 1;
+    if (thumb)
+        address &= ~1;
+    else
+        address &= ~3UL;
+#elif defined(__aarch64__)
+    address &= ~3UL;
 #endif
 
     pid_t tid = _pid;
@@ -815,20 +857,20 @@ bool KittyTraceMgr::softTrapWait(uintptr_t address, const std::function<bool(use
     user_regs_struct regs = {};
 
     // cleanup failure return
-    auto failure_return = [&]() -> bool {
-        KITTY_LOGE("softTrapWait(%p): Failed.", (void *)address);
-
+    auto failure_return = [&](KT_BP_RESULT res = KT_BP_FAILED) -> KT_BP_RESULT {
+        KITTY_LOGE("setSoftBreakpointAndWait(%p): Failed.", (void *)address);
         pokeMem(address, bak_code.data(), bak_code.size());
-        return false;
+        return res;
     };
 
     auto validate_trap = [this](const user_regs_struct &regs, uintptr_t trap_addr) -> bool {
         uintptr_t pc = regs.KT_REG_PC;
-        if (pc != trap_addr && pc != (trap_addr + sizeof(KittyTraceInsns::brkTrapInsn)))
+        uintptr_t max_range = KT_ALIGN_UP(trap_addr + sizeof(KittyTraceInsns::BRKP), sizeof(uintptr_t));
+        if (!(pc >= trap_addr && pc <= max_range))
         {
             siginfo_t si = {};
             getSignalInfo(&si);
-            return uintptr_t(si.si_addr) == trap_addr;
+            return uintptr_t(si.si_addr) >= trap_addr && uintptr_t(si.si_addr) <= max_range;
         }
         return true;
     };
@@ -840,84 +882,97 @@ again:
 
     if (!peekMem(address, bak_code.data(), bak_code.size()))
     {
-        KITTY_LOGE("softTrapWait(%p): Failed to backup memory code.", (void *)address);
-        return false;
+        KITTY_LOGE("setSoftBreakpointAndWait(%p): Failed to backup memory code.", (void *)address);
+        return KT_BP_MEM_FAILED;
     }
 
-    for (int i = 0; i < (int(sizeof(uint32_t)) / int(sizeof(KittyTraceInsns::nopInsn))); i++)
-    {
-        memcpy(brk_code.data() + (i * sizeof(KittyTraceInsns::nopInsn)),
-               KittyTraceInsns::nopInsn,
-               sizeof(KittyTraceInsns::nopInsn));
-    }
-    memcpy(brk_code.data(), KittyTraceInsns::brkTrapInsn, sizeof(KittyTraceInsns::brkTrapInsn));
+#if defined(__arm__)
+    if (thumb)
+        memcpy(brk_code.data(), KittyTraceInsns::THUMB_BRKP, sizeof(KittyTraceInsns::THUMB_BRKP));
+    else
+        memcpy(brk_code.data(), KittyTraceInsns::BRKP, sizeof(KittyTraceInsns::BRKP));
+#else
+    memcpy(brk_code.data(), KittyTraceInsns::BRKP, sizeof(KittyTraceInsns::BRKP));
+#endif
 
     if (!pokeMem(address, brk_code.data(), brk_code.size()))
     {
-        KITTY_LOGE("softTrapWait(%p): Failed to write brk code into memory.", (void *)address);
-        return false;
+        KITTY_LOGE("setSoftBreakpointAndWait(%p): Failed to write brk code into memory.", (void *)address);
+        return KT_BP_MEM_FAILED;
     }
 
-    // resume execution
     if (!cont())
-        return failure_return();
+        return failure_return(KT_BP_CONT_FAILED);
 
-    // Catch SIGTRAP
     do
     {
         errno = 0;
         status = 0;
-        wp = wait(&status, WUNTRACED);
+        wp = wait(&status, WUNTRACED, timeout_ms);
         if (wp != tid)
         {
-            KITTY_LOGE("softTrapWait(%p): waitpid returned %d. \"%s\".", (void *)address, wp, strerror(errno));
-            return failure_return();
+            if (wp == 0)
+            {
+                stop();
+                KITTY_LOGE("setSoftBreakpointAndWait(%p): timedout!", (void *)address);
+                pokeMem(address, bak_code.data(), bak_code.size());
+                return KT_BP_TIMEOUT;
+            }
+
+            KITTY_LOGE("setSoftBreakpointAndWait(%p): waitpid returned %d. \"%s\".",
+                       (void *)address,
+                       wp,
+                       strerror(errno));
+
+            return failure_return(KT_BP_WAIT_FAILED);
         }
 
         if (WIFEXITED(status))
         {
             _attached = false;
-            KITTY_LOGE("softTrapWait(%p): Target process exited (%d).", (void *)address, WEXITSTATUS(status));
-            return false;
+            KITTY_LOGE("setSoftBreakpointAndWait(%p): Target process exited (%d).",
+                       (void *)address,
+                       WEXITSTATUS(status));
+            return KT_BP_EXITED;
         }
 
         if (WIFSIGNALED(status))
         {
             _attached = false;
-            KITTY_LOGE("softTrapWait(%p): Target process terminated (%d).", (void *)address, WTERMSIG(status));
-            return false;
+            KITTY_LOGE("setSoftBreakpointAndWait(%p): Target process terminated (%d).",
+                       (void *)address,
+                       WTERMSIG(status));
+            return KT_BP_EXITED;
         }
 
         if (!WIFSTOPPED(status))
-        {
-            KITTY_LOGE("softTrapWait(%p): Target process didn't stop (status(0x%X)).", (void *)address, (status));
-            return failure_return();
-        }
+            continue;
 
-        if (WSTOPSIG(status) == SIGSTOP)
+        if (WSTOPSIG(status) == SIGCHLD || WSTOPSIG(status) == SIGSTOP || WSTOPSIG(status) == SIGTSTP)
         {
             if (!cont())
-                return failure_return();
+                return failure_return(KT_BP_CONT_FAILED);
 
             continue;
         }
 
         if (!getRegs(&regs))
-            return failure_return();
+            return failure_return(KT_BP_REGS_FAILED);
 
         if (WSTOPSIG(status) == SIGTRAP)
         {
             if (validate_trap(regs, address))
                 break;
 
-            KITTY_LOGE("softTrapWait(%p): Process didn't stop at specified brkp", (void *)address);
+            KITTY_LOGE("setSoftBreakpointAndWait(%p): Process didn't stop at specified Hardware Breakpoint",
+                       (void *)address);
         }
         else
         {
-            KITTY_LOGE("softTrapWait(%p): Target process didn't stop with SIGTRAP", (void *)address);
+            KITTY_LOGE("setSoftBreakpointAndWait(%p): Target process didn't stop with SIGTRAP", (void *)address);
         }
 
-        KITTY_LOGE("softTrapWait(%p): PC(%p) | RET(%p).",
+        KITTY_LOGE("setSoftBreakpointAndWait(%p): PC(%p) | RET(%p).",
                    (void *)address,
                    (void *)(regs.KT_REG_PC),
                    (void *)(regs.KT_REG_RET));
@@ -925,7 +980,7 @@ again:
         siginfo_t si = {};
         getSignalInfo(&si);
 
-        KITTY_LOGE("softTrapWait(%p): SIG(%s) | CODE(%d) | ADDR(%p).",
+        KITTY_LOGE("setSoftBreakpointAndWait(%p): SIG(%s) | CODE(%d) | ADDR(%p).",
                    (void *)address,
                    strsignal(si.si_signo),
                    si.si_code,
@@ -934,253 +989,400 @@ again:
         auto map = KittyMemoryEx::getAddressMap(_pid, uintptr_t(si.si_addr));
         if (map.isValid())
         {
-            KITTY_LOGE("softTrapWait(%p): MAP(<base>+%p) %s",
+            KITTY_LOGE("setSoftBreakpointAndWait(%p): MAP(<base>+%p) %s",
                        (void *)address,
                        (void *)((map.offset + uintptr_t(si.si_addr)) - map.startAddress),
                        map.toString().c_str());
         }
 
-        return failure_return();
+        if (!cont(WSTOPSIG(status)))
+            return failure_return(KT_BP_CONT_FAILED);
+
+        return failure_return(KT_BP_MISMATCH_STOP);
+
     } while (true);
 
     if (!pokeMem(address, bak_code.data(), bak_code.size()))
     {
-        KITTY_LOGE("softTrapWait(%p): Failed to restore memory code!", (void *)address);
-        return false;
+        KITTY_LOGE("setSoftBreakpointAndWait(%p): Failed to restore memory code!", (void *)address);
+        return KT_BP_MEM_FAILED;
     }
 
 #if defined(__i386__) || defined(__x86_64__)
-    regs.KT_REG_PC -= sizeof(KittyTraceInsns::brkTrapInsn);
+    regs.KT_REG_PC -= sizeof(KittyTraceInsns::BRKP);
     if (!setRegs(&regs))
     {
-        KITTY_LOGE("softTrapWait(%p): Failed to rewind PC!", (void *)address);
-        return false;
+        KITTY_LOGE("setSoftBreakpointAndWait(%p): Failed to rewind PC!", (void *)address);
+        return KT_BP_REGS_FAILED;
     }
 #endif
 
-    KITTY_LOGD("softTrapWait(%p): Success PC(%p).", (void *)address, (void *)regs.KT_REG_PC);
+    KITTY_LOGD("setSoftBreakpointAndWait(%p): Success PC(%p).", (void *)address, (void *)regs.KT_REG_PC);
 
     if (cb && !cb(regs))
     {
-        if (!step())
+        if (!waitStep())
         {
-            KITTY_LOGE("softTrapWait(%p): Failed to step past breakpoint!", (void *)address);
-            return false;
+            KITTY_LOGE("setSoftBreakpointAndWait(%p): Failed to step past breakpoint!", (void *)address);
+            return KT_BP_STEP_FAILED;
         }
 
         goto again;
     }
 
-    return true;
+    return KT_BP_SUCCESS;
 }
 
-#if 0
-bool KittyTraceMgr::hardTrapWait(uintptr_t address, size_t size, KT_TRAP_TYPE type,
-                                 const std::function<bool(user_regs_struct regs)> &cb)
+KT_BP_RESULT KittyTraceMgr::setHardBreakpointAndWait(uintptr_t address,
+                                                     KT_HW_BP_TYPE type,
+                                                     KT_HW_BP_SIZE size,
+                                                     int slot,
+                                                     const std::function<bool(user_regs_struct regs)> &cb,
+                                                     int timeout_ms)
 {
     if (!_attached || _pid <= 0 || address == 0)
-        return 0;
+        return KT_BP_FAILED;
 
     pid_t tid = _pid;
     int status = 0;
     pid_t wp = 0;
     user_regs_struct regs = {};
 
-#if defined(__arm__) || defined(__aarch64__)
-    address &= ~3;
-#endif
-
-    auto set_watchpoint = [&]() -> bool {
-#if defined(__aarch64__) || defined(__arm__)
-        uint32_t control;
-        switch (type)
-        {
-        case KT_TRAP_EXECUTE:
-            control = (((1 << size) - 1) << 5) | (0 << 3) | 1;
-            break;
-        case KT_TRAP_READ:
-            control = (((1 << size) - 1) << 5) | (1 << 3) | 1;
-            break;
-        case KT_TRAP_WRITE:
-            control = (((1 << size) - 1) << 5) | (2 << 3) | 1;
-            break;
-        case KT_TRAP_ACCESS:
-            control = (((1 << size) - 1) << 5) | (3 << 3) | 1;
-            break;
-        }
-
-#ifdef __arm__
-        return ptrace(PTRACE_SETHBPREGS, tid, -1, &address) != -1 && ptrace(PTRACE_SETHBPREGS, tid, -2, &control) != -1;
-#else
-        user_hwdebug_state hw;
-        memset(&hw, 0, sizeof hw);
-
-        hw.dbg_regs[0].addr = address;
-        hw.dbg_regs[0].ctrl = control;
-
-        struct iovec iov;
-        iov.iov_base = &hw;
-        iov.iov_len = offsetof(user_hwdebug_state, dbg_regs) + sizeof(hw.dbg_regs[0]);
-
-        return ptrace(PTRACE_SETREGSET, tid, type == KT_TRAP_EXECUTE ? NT_ARM_HW_BREAK : NT_ARM_HW_WATCH, &iov) != -1;
-#endif
-
-#elif defined(__x86_64__) || defined(__i386__)
-        if (ptrace(PTRACE_POKEUSER, tid, offsetof(struct user, u_debugreg[0]), address) == -1)
-            return false;
-
-        unsigned long control = 0;
-        switch (type)
-        {
-        case KT_TRAP_EXECUTE:
-            control = 0;
-            break;
-        case KT_TRAP_WRITE:
-            control = 1;
-            break;
-        case KT_TRAP_READ:
-        case KT_TRAP_ACCESS:
-            control = 3;
-            break;
-        }
-
-        unsigned long len = (size == 8) ? 2 : size - 1;
-        unsigned long enable = 1;
-        unsigned long mask = (3UL << 18) | (3UL << 16) | (1UL << 0);
-        unsigned long value = (len << 18) | (control << 16) | (enable << 0);
-
-        unsigned long dr7 = ptrace(PTRACE_PEEKUSER, tid, offsetof(user, u_debugreg[7]), nullptr);
-        dr7 &= ~mask;
-        dr7 |= value;
-
-        return ptrace(PTRACE_POKEUSER, tid, offsetof(struct user, u_debugreg[7]), dr7) != -1;
-#endif
+    auto failure_return = [&](KT_BP_RESULT res = KT_BP_FAILED) -> KT_BP_RESULT {
+        KITTY_LOGE("setHardBreakpointAndWait(%p): Failed.", (void *)address);
+        clearHwBreakpoint(type, slot);
+        return res;
     };
 
-    auto clear_watchpoint = [&]() {
-#if defined(__arm__)
-        ptrace(PTRACE_SETHBPREGS, tid, -1, 0);
-        ptrace(PTRACE_SETHBPREGS, tid, -2, 0);
-
-#elif defined(__aarch64__)
-        user_hwdebug_state hw;
-        memset(&hw, 0, sizeof hw);
-        struct iovec iov = {&hw, offsetof(user_hwdebug_state, dbg_regs) + sizeof(hw.dbg_regs[0])};
-        ptrace(PTRACE_SETREGSET, tid, type == KT_TRAP_EXECUTE ? NT_ARM_HW_BREAK : NT_ARM_HW_WATCH, &iov);
-
-#elif defined(__x86_64__) || defined(__i386__)
-        ptrace(PTRACE_POKEUSER, tid, offsetof(struct user, u_debugreg[0]), 0);
-        ptrace(PTRACE_POKEUSER, tid, offsetof(struct user, u_debugreg[6]), 0);
-        ptrace(PTRACE_POKEUSER, tid, offsetof(struct user, u_debugreg[7]), 0);
-#endif
-    };
-
-    auto failure_return = [&]() -> bool {
-        KITTY_LOGE("hardTrapWait(%p): Failed.", (void *)address);
-
-        clear_watchpoint();
-        return false;
+    auto validate_trap = [this, size](const user_regs_struct &regs, uintptr_t trap_addr) -> bool {
+        trap_addr &= ~1;
+        trap_addr &= ~(sizeof(uintptr_t) - 1);
+        uintptr_t pc = regs.KT_REG_PC;
+        uintptr_t max_range = KT_ALIGN_UP(trap_addr + std::max(int(size), int(sizeof(KittyTraceInsns::BRKP))),
+                                          int(sizeof(uintptr_t)));
+        if (!(pc >= trap_addr && pc <= max_range))
+        {
+            siginfo_t si = {};
+            getSignalInfo(&si);
+            return uintptr_t(si.si_addr) >= trap_addr && uintptr_t(si.si_addr) <= max_range;
+        }
+        return true;
     };
 
 again:
 
-    if (!set_watchpoint())
+    if (type == KT_HW_BP_EXECUTE)
     {
-        KITTY_LOGE("hardTrapWait(%p): Failed to set watchpoint!", (void *)address);
-        return false;
+#if defined(__arm__)
+        if (!setHwBreakpoint(address, type, (address & 1) != 0 ? KT_HW_BP_SIZE_2 : KT_HW_BP_SIZE_4, slot))
+#elif defined(__aarch64__)
+        if (!setHwBreakpoint(address, type, KT_HW_BP_SIZE_4, slot))
+#else
+        if (!setHwBreakpoint(address, type, KT_HW_BP_SIZE_1, slot))
+#endif
+        {
+            KITTY_LOGE("setHardBreakpointAndWait(%p): Failed to set breakpoint. \"%s\"",
+                       (void *)address,
+                       strerror(errno));
+            return KT_BP_FAILED;
+        }
+    }
+    else
+    {
+        if (!setHwBreakpoint(address, type, size, slot))
+        {
+            KITTY_LOGE("setHardBreakpointAndWait(%p): Failed to set watchpoint. \"%s\"",
+                       (void *)address,
+                       strerror(errno));
+            return KT_BP_FAILED;
+        }
     }
 
     if (!cont())
-        return failure_return();
+        return failure_return(KT_BP_CONT_FAILED);
 
     do
     {
         errno = 0;
         status = 0;
-        wp = wait(&status, WUNTRACED);
+        wp = wait(&status, WUNTRACED, timeout_ms);
         if (wp != tid)
         {
-            KITTY_LOGE("hardTrapWait(%p): waitpid returned %d. \"%s\".", (void *)address, wp, strerror(errno));
-            return failure_return();
+            if (wp == 0)
+            {
+                stop();
+                KITTY_LOGE("setHardBreakpointAndWait(%p): timedout!", (void *)address);
+                clearHwBreakpoint(type, slot);
+                return KT_BP_TIMEOUT;
+            }
+
+            KITTY_LOGE("setHardBreakpointAndWait(%p): waitpid returned %d. \"%s\".",
+                       (void *)address,
+                       wp,
+                       strerror(errno));
+
+            return failure_return(KT_BP_WAIT_FAILED);
         }
 
         if (WIFEXITED(status))
         {
-            KITTY_LOGE("hardTrapWait(%p): Target process exited (%d).", (void *)address, WEXITSTATUS(status));
-            return false;
+            _attached = false;
+            KITTY_LOGE("setHardBreakpointAndWait(%p): Target process exited (%d).",
+                       (void *)address,
+                       WEXITSTATUS(status));
+            return KT_BP_EXITED;
         }
 
         if (WIFSIGNALED(status))
         {
-            KITTY_LOGE("hardTrapWait(%p): Target process terminated (%d).", (void *)address, WTERMSIG(status));
-            return false;
+            _attached = false;
+            KITTY_LOGE("setHardBreakpointAndWait(%p): Target process terminated (%d).",
+                       (void *)address,
+                       WTERMSIG(status));
+            return KT_BP_EXITED;
         }
 
         if (!WIFSTOPPED(status))
-        {
-            KITTY_LOGE("hardTrapWait(%p): Target process didn't stop (status(0x%X)).", (void *)address, (status));
-            return failure_return();
-        }
+            continue;
 
-        if (WSTOPSIG(status) == SIGSTOP)
+        if (WSTOPSIG(status) == SIGCHLD || WSTOPSIG(status) == SIGSTOP || WSTOPSIG(status) == SIGTSTP)
         {
             if (!cont())
-                return failure_return();
+                return failure_return(KT_BP_CONT_FAILED);
 
             continue;
         }
 
         if (!getRegs(&regs))
-            return failure_return();
+            return failure_return(KT_BP_REGS_FAILED);
 
         if (WSTOPSIG(status) == SIGTRAP)
         {
-            siginfo_t si{};
+            /*siginfo_t si{};
             getSignalInfo(&si);
             if (si.si_code == 4)
+                break;*/
+
+            if (validate_trap(regs, address))
                 break;
 
-            KITTY_LOGE("hardTrapWait(%p): Process didn't stop at specified Hardware Breakpoint", (void *)address);
+            KITTY_LOGE("setHardBreakpointAndWait(%p): Process didn't stop at specified Hardware Breakpoint",
+                       (void *)address);
         }
         else
         {
-            KITTY_LOGE("hardTrapWait(%p): Target process didn't stop with SIGTRAP", (void *)address);
+            KITTY_LOGE("setHardBreakpointAndWait(%p): Target process didn't stop with SIGTRAP", (void *)address);
         }
 
-        KITTY_LOGE("hardTrapWait(%p): PC(%p) | RET(%p).", (void *)address, (void *)(regs.KT_REG_PC),
+        KITTY_LOGE("setHardBreakpointAndWait(%p): PC(%p) | RET(%p).",
+                   (void *)address,
+                   (void *)(regs.KT_REG_PC),
                    (void *)(regs.KT_REG_RET));
 
         siginfo_t si = {};
         getSignalInfo(&si);
 
-        KITTY_LOGE("hardTrapWait(%p): SIG(%s) | CODE(%d) | ADDR(%p).", (void *)address, strsignal(si.si_signo),
-                   si.si_code, (void *)(si.si_addr));
+        KITTY_LOGE("setHardBreakpointAndWait(%p): SIG(%s) | CODE(%d) | ADDR(%p).",
+                   (void *)address,
+                   strsignal(si.si_signo),
+                   si.si_code,
+                   (void *)(si.si_addr));
 
         auto map = KittyMemoryEx::getAddressMap(_pid, uintptr_t(si.si_addr));
         if (map.isValid())
         {
-            KITTY_LOGE("hardTrapWait(%p): MAP(<base>+%p) %s", (void *)address,
-                   (void *)((map.offset + uintptr_t(si.si_addr)) - map.startAddress), map.toString().c_str());
+            KITTY_LOGE("setHardBreakpointAndWait(%p): MAP(<base>+%p) %s",
+                       (void *)address,
+                       (void *)((map.offset + uintptr_t(si.si_addr)) - map.startAddress),
+                       map.toString().c_str());
         }
 
-        return failure_return();
+        if (!cont(WSTOPSIG(status)))
+            return failure_return(KT_BP_CONT_FAILED);
+
+        // return failure_return(KT_BP_MISMATCH_STOP);
+
     } while (true);
 
-    KITTY_LOGD("hardTrapWait(%p): Success PC(%p).", (void *)address, (void *)regs.KT_REG_PC);
+    KITTY_LOGD("setHardBreakpointAndWait(%p): Success PC(%p).", (void *)address, (void *)regs.KT_REG_PC);
 
-    clear_watchpoint();
+    clearHwBreakpoint(type, slot);
 
     if (cb && !cb(regs))
     {
-        if (!step())
+        if (!waitStep())
         {
-            KITTY_LOGE("hardTrapWait(%p): Failed to step past breakpoint!", (void *)address);
-            return false;
+            KITTY_LOGE("setHardBreakpointAndWait(%p): Failed to step past breakpoint!", (void *)address);
+            return KT_BP_STEP_FAILED;
         }
 
         goto again;
     }
 
-    return true;
+    return KT_BP_SUCCESS;
 }
+
+#if defined(__arm__) && !defined(PTRACE_GETHBPREGS)
+#define PTRACE_GETHBPREGS 29
+#define PTRACE_SETHBPREGS 30
 #endif
+
+bool KittyTraceMgr::setHwBreakpoint(uintptr_t address, KT_HW_BP_TYPE type, KT_HW_BP_SIZE size, int slot)
+{
+    errno = 0;
+    pid_t tid = _pid;
+
+#if defined(__arm__) || defined(__aarch64__)
+    address &= ~1;
+    size_t alignment_mask = type == KT_HW_BP_EXECUTE ? (sizeof(uint32_t) - 1) : (sizeof(uintptr_t) - 1);
+
+    uintptr_t offset = address & alignment_mask;
+    address &= ~alignment_mask;
+
+    // Build the Byte Address Select (BAS) mask based on size and offset
+    uint32_t bas = ((1U << size) - 1) << offset;
+
+    uint32_t type_bits = 0;
+    switch (type)
+    {
+    case KT_HW_BP_EXECUTE:
+        type_bits = 0;
+        break;
+    case KT_HW_BP_READ:
+        type_bits = 1;
+        break;
+    case KT_HW_BP_WRITE:
+        type_bits = 2;
+        break;
+    case KT_HW_BP_ACCESS:
+        type_bits = 3;
+        break;
+    }
+
+    uint32_t privilege = (2 << 1); // Privilege Mode: 1 = Kernel, 2 = User, 3 = Any.
+    uint32_t enabled = 1;          // Bit 0: Enable
+    uint32_t ctrl = enabled | privilege | (type_bits << 3) | (bas << 5);
+
+#if defined(__arm__)
+    long vr_idx = type == KT_HW_BP_EXECUTE ? (((slot * 2) + 1)) : (-(slot * 2) + 1);
+    long cr_idx = type == KT_HW_BP_EXECUTE ? (((slot * 2) + 2)) : (-(slot * 2) + 2);
+    return ptrace(PTRACE_SETHBPREGS, tid, vr_idx, &address) != -1L &&
+           ptrace(PTRACE_SETHBPREGS, tid, cr_idx, &ctrl) != -1L;
+
+#elif defined(__aarch64__)
+    struct user_hwdebug_state state{};
+
+    struct iovec iov;
+    iov.iov_base = &state;
+    iov.iov_len = offsetof(struct user_hwdebug_state, dbg_regs) + (sizeof(state.dbg_regs[0]) * (slot + 1));
+
+    int regset = (type == KT_HW_BP_EXECUTE) ? NT_ARM_HW_BREAK : NT_ARM_HW_WATCH;
+
+    // Read current state
+    if (ptrace(PTRACE_GETREGSET, tid, regset, &iov) == -1)
+        return false;
+
+    // Overwrite slot
+    state.dbg_regs[slot].addr = address;
+    state.dbg_regs[slot].ctrl = ctrl;
+
+    // Update state
+    return ptrace(PTRACE_SETREGSET, tid, regset, &iov) != -1L;
+#endif
+
+#elif defined(__x86_64__) || defined(__i386__)
+    // Set Address in DR0-DR3
+    if (ptrace(PTRACE_POKEUSER, tid, offsetof(struct user, u_debugreg[slot]), address) == -1L)
+        return false;
+
+    // Retrieve current DR7 to avoid overwriting other slots
+    errno = 0;
+    unsigned long dr7 = ptrace(PTRACE_PEEKUSER, tid, offsetof(struct user, u_debugreg[7]), 0);
+    if (dr7 == ((unsigned long)-1) && errno != 0)
+        return false;
+
+    // Configure type bits
+    unsigned long type_bits = 0;
+    switch (type)
+    {
+    case KT_HW_BP_EXECUTE:
+        type_bits = 0;
+        break;
+    case KT_HW_BP_WRITE:
+        type_bits = 1;
+        break;
+    case KT_HW_BP_READ:
+    case KT_HW_BP_ACCESS:
+        type_bits = 3;
+        break; // x86 doesn't support 'Read-Only'
+    }
+
+    // Configure length
+    unsigned long len_bits = type == KT_HW_BP_EXECUTE ? 0 : ((int(size) == 8) ? 2 : (int(size) - 1));
+
+    int l_bit = (slot * 2);        // Local Enable bits are 0, 2, 4, 6
+    int rw_bit = 16 + (slot * 4);  // RW bits are 16, 20, 24, 28
+    int len_bit = 18 + (slot * 4); // LEN bits are 18, 22, 26, 30
+
+    dr7 &= ~((3UL << rw_bit) | (3UL << len_bit) | (3UL << l_bit));         // Clear slot
+    dr7 |= (type_bits << rw_bit) | (len_bits << len_bit) | (1UL << l_bit); // Set slot
+
+    // Update DR7
+    return ptrace(PTRACE_POKEUSER, tid, offsetof(struct user, u_debugreg[7]), dr7) != -1L;
+#endif
+}
+
+bool KittyTraceMgr::clearHwBreakpoint(KT_HW_BP_TYPE type, int slot)
+{
+    pid_t tid = _pid;
+    errno = 0;
+    ((void)type);
+
+#if defined(__arm__)
+    uintptr_t address = 0;
+    uint32_t ctrl = 0;
+    long vr_idx = type == KT_HW_BP_EXECUTE ? (((slot * 2) + 1)) : (-(slot * 2) + 1);
+    long cr_idx = type == KT_HW_BP_EXECUTE ? (((slot * 2) + 2)) : (-(slot * 2) + 2);
+    return ptrace(PTRACE_SETHBPREGS, tid, vr_idx, &address) != -1L &&
+           ptrace(PTRACE_SETHBPREGS, tid, cr_idx, &ctrl) != -1L;
+
+#elif defined(__aarch64__)
+    struct user_hwdebug_state state{};
+
+    struct iovec iov;
+    iov.iov_base = &state;
+    iov.iov_len = offsetof(struct user_hwdebug_state, dbg_regs) + (sizeof(state.dbg_regs[0]) * (slot + 1));
+
+    int regset = (type == KT_HW_BP_EXECUTE) ? NT_ARM_HW_BREAK : NT_ARM_HW_WATCH;
+
+    // Read current state
+    if (ptrace(PTRACE_GETREGSET, tid, regset, &iov) == -1)
+        return false;
+
+    // Overwrite slot
+    state.dbg_regs[slot].addr = 0;
+    state.dbg_regs[slot].ctrl = 0;
+
+    // Update state
+    return ptrace(PTRACE_SETREGSET, tid, regset, &iov) != -1L;
+
+#elif defined(__x86_64__) || defined(__i386__)
+    ptrace(PTRACE_POKEUSER, tid, offsetof(struct user, u_debugreg[6]), 0);
+
+    ptrace(PTRACE_POKEUSER, tid, offsetof(struct user, u_debugreg[slot]), 0);
+
+    errno = 0;
+    unsigned long dr7 = ptrace(PTRACE_PEEKUSER, tid, offsetof(struct user, u_debugreg[7]), 0);
+    if (dr7 == ((unsigned long)-1) && errno != 0)
+        return false;
+
+    // 3. Clear L/G enable bits (bits 0-7)
+    dr7 &= ~(3UL << (slot * 2));
+
+    // 4. Clear RW/LEN bits (bits 16-31)
+    // Each slot has 4 bits of config starting at bit 16
+    dr7 &= ~(0xFUL << (16 + (slot * 4)));
+
+    return ptrace(PTRACE_POKEUSER, tid, offsetof(struct user, u_debugreg[7]), dr7) != -1;
+#endif
+}
