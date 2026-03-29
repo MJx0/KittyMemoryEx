@@ -10,6 +10,9 @@
 #include <unistd.h>
 #include <dirent.h>
 
+#include <errno.h>
+#include <inttypes.h>
+
 #include <cstring>
 #include <cstdint>
 #include <cstdarg>
@@ -25,9 +28,7 @@
 #include <random>
 #include <functional>
 #include <mutex>
-
-#include <errno.h>
-#include <inttypes.h>
+#include <cctype>
 
 /**
  * @brief Returns the memory page size.
@@ -46,6 +47,9 @@ static inline size_t KTGetPageSize()
 #define KT_PAGE_END(x) (KT_PAGE_START(uintptr_t(x) + KT_PAGE_SIZE - 1))
 #define KT_PAGE_OFFSET(x) (uintptr_t(x) - KT_PAGE_START(x))
 #define KT_PAGE_LEN(x) (size_t(KT_PAGE_SIZE - KT_PAGE_OFFSET(x)))
+
+#define KT_ALIGN_UP(ptr, align) (((uintptr_t)(ptr) + (align) - 1) & ~((align) - 1))
+#define KT_ALIGN_DOWN(ptr, align) (((uintptr_t)(ptr)) & ~((uintptr_t)(align) - 1))
 
 #if defined(__ANDROID__) && defined(kUSE_LOGCAT)
 
@@ -202,42 +206,72 @@ namespace KittyUtils
     namespace String
     {
         /**
+         * @brief Helper to compare two characters case-insensitively.
+         */
+        static inline bool charEqualsIgnoreCase(char a, char b)
+        {
+            return std::tolower(static_cast<unsigned char>(a)) == std::tolower(static_cast<unsigned char>(b));
+        }
+
+        /**
          * @brief Checks if a string starts with a given prefix.
          *
          * @param str The string to check.
-         * @param str2 The prefix to look for.
+         * @param prefix The prefix to look for.
+         * @param sensitive Whether the comparison should be case-sensitive (default is true).
          *
-         * @return true if str starts with str2, false otherwise.
+         * @return true if str starts with prefix, false otherwise.
          */
-        static inline bool startsWith(const std::string &str, const std::string &str2)
+        static inline bool startsWith(const std::string &str, const std::string &prefix, bool sensitive = true)
         {
-            return str.length() >= str2.length() && str.compare(0, str2.length(), str2) == 0;
+            if (str.length() < prefix.length())
+                return false;
+            if (sensitive)
+            {
+                return str.compare(0, prefix.length(), prefix) == 0;
+            }
+            return std::equal(prefix.begin(), prefix.end(), str.begin(), charEqualsIgnoreCase);
         }
 
         /**
          * @brief Checks if a string contains a given substring.
          *
          * @param str The string to check.
-         * @param str2 The substring to look for.
+         * @param substring The substring to look for.
+         * @param sensitive Whether the comparison should be case-sensitive (default is true).
          *
-         * @return true if str contains str2, false otherwise.
+         * @return true if str contains substring, false otherwise.
          */
-        static inline bool contains(const std::string &str, const std::string &str2)
+        static inline bool contains(const std::string &str, const std::string &substring, bool sensitive = true)
         {
-            return str.length() >= str2.length() && str.find(str2) != std::string::npos;
+            if (str.length() < substring.length())
+                return false;
+            if (sensitive)
+            {
+                return str.find(substring) != std::string::npos;
+            }
+            auto it = std::search(str.begin(), str.end(), substring.begin(), substring.end(), charEqualsIgnoreCase);
+            return it != str.end();
         }
 
         /**
          * @brief Checks if a string ends with a given suffix.
          *
          * @param str The string to check.
-         * @param str2 The suffix to look for.
+         * @param suffix The suffix to look for.
+         * @param sensitive Whether the comparison should be case-sensitive (default is true).
          *
-         * @return true if str ends with str2, false otherwise.
+         * @return true if str ends with suffix, false otherwise.
          */
-        static inline bool endsWith(const std::string &str, const std::string &str2)
+        static inline bool endsWith(const std::string &str, const std::string &suffix, bool sensitive = true)
         {
-            return str.length() >= str2.length() && str.compare(str.length() - str2.length(), str2.length(), str2) == 0;
+            if (str.length() < suffix.length())
+                return false;
+            if (sensitive)
+            {
+                return str.compare(str.length() - suffix.length(), suffix.length(), suffix) == 0;
+            }
+            return std::equal(suffix.rbegin(), suffix.rend(), str.rbegin(), charEqualsIgnoreCase);
         }
 
         /**
