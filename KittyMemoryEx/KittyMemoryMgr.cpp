@@ -82,8 +82,10 @@ bool KittyMemoryMgr::initialize(pid_t pid, EKittyMemOP eMemOp, bool initMemPatch
 
 #endif
 
-    uintptr_t defaultCaller = 0;
-    trace = KittyTraceMgr(pid, defaultCaller);
+    if (trace.pid() != pid)
+    {
+        trace = KittyTraceMgr(pid);
+    }
 
     return true;
 }
