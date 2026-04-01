@@ -1,6 +1,7 @@
 #pragma once
 
 #include "KittyUtils.hpp"
+#include <unordered_map>
 
 /**
  * @brief Provides utility functions for process memory.
