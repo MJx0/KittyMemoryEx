@@ -265,9 +265,10 @@ int main(int argc, char *args[])
 
     // mmap(nullptr, KT_PAGE_SIZE, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
     uintptr_t mmap_ret = kittyMemMgr.trace.callFunction(remote_mmap, nullptr, KT_PAGE_SIZE, PROT_READ | PROT_WRITE,
-                                                        MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
+                                                        MAP_PRIVATE | MAP_ANONYMOUS, -1, 0).result.ptr;
     // munmap(mmap_ret, KT_PAGE_SIZE);
-    uintptr_t munmap_ret = kittyMemMgr.trace.callFunction(remote_munmap, mmap_ret, KT_PAGE_SIZE);
+    uintptr_t munmap_ret = kittyMemMgr.trace.callFunction(remote_munmap, mmap_ret, KT_PAGE_SIZE).result.val;
+
 
     KITTY_LOGI("Remote call [ mmap_ret=%p | munmap_ret=%p ]", (void *)mmap_ret, (void *)munmap_ret);
 
