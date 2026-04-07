@@ -88,6 +88,14 @@ public:
     }
 
     /**
+     * @brief Returns memory operations pointer.
+     */
+    inline IKittyMemOp *memOp() const
+    {
+        return _pMemOp.get();
+    }
+
+    /**
      * @brief Reads remote memory from a specified address.
      * @param address The address in remote memory to read.
      * @param buffer The buffer to store the read data.
