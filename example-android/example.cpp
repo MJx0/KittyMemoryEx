@@ -106,7 +106,8 @@ int main(int argc, char *args[])
     // symbol lookup by name in all loaded elfs
     // auto v_eglSwapBuffers = kittyMemMgr.elfScanner.findSymbolAll("eglSwapBuffers");
     // use filters
-    auto v_eglSwapBuffers = kittyMemMgr.elfScanner.findSymbolAll("eglSwapBuffers", EScanElfType::Any,
+    auto v_eglSwapBuffers = kittyMemMgr.elfScanner.findSymbolAll("eglSwapBuffers",
+                                                                 EScanElfType::Any,
                                                                  EScanElfFilter::System);
     // scan natives only
     // auto v_eglSwapBuffers = kittyMemMgr.elfScanner.findSymbolAll("eglSwapBuffers", EScanElfType::Native,
@@ -183,7 +184,7 @@ int main(int argc, char *args[])
 
     KITTY_LOGI("==================== MEMORY DUMP ====================");
 
-    std::string dumpFolder = KittyUtils::getExternalStorage();
+    std::string dumpFolder = KittyUtils::Android::getExternalStorage();
     bool isDumped = false;
 
     // dump memory elf
@@ -211,19 +212,25 @@ int main(int argc, char *args[])
     KITTY_LOGI("search end %p", (void *)search_end);
 
     // scan with direct bytes & get one result
-    found_at = kittyMemMgr.memScanner.findBytesFirst(search_start, search_end, "\x33\x44\x55\x66\x00\x77\x88\x00\x99",
+    found_at = kittyMemMgr.memScanner.findBytesFirst(search_start,
+                                                     search_end,
+                                                     "\x33\x44\x55\x66\x00\x77\x88\x00\x99",
                                                      "xxxx??x?x");
     KITTY_LOGI("found bytes at: %p", (void *)found_at);
     // scan with direct bytes & get all results
-    found_at_list = kittyMemMgr.memScanner.findBytesAll(search_start, search_end,
-                                                        "\x33\x44\x55\x66\x00\x77\x88\x00\x99", "xxxx??x?x");
+    found_at_list = kittyMemMgr.memScanner.findBytesAll(search_start,
+                                                        search_end,
+                                                        "\x33\x44\x55\x66\x00\x77\x88\x00\x99",
+                                                        "xxxx??x?x");
     KITTY_LOGI("found bytes results: %zu", found_at_list.size());
 
     // scan with hex & get one result
     found_at = kittyMemMgr.memScanner.findHexFirst(search_start, search_end, "33 44 55 66 00 77 88 00 99", "xxxx??x?x");
     KITTY_LOGI("found hex at: %p", (void *)found_at);
     // scan with hex & get all results
-    found_at_list = kittyMemMgr.memScanner.findHexAll(search_start, search_end, "33 44 55 66 00 77 88 00 99",
+    found_at_list = kittyMemMgr.memScanner.findHexAll(search_start,
+                                                      search_end,
+                                                      "33 44 55 66 00 77 88 00 99",
                                                       "xxxx??x?x");
     KITTY_LOGI("found hex results: %zu", found_at_list.size());
 
@@ -256,7 +263,7 @@ int main(int argc, char *args[])
 
     KITTY_LOGI("===================== ELFS SCAN ====================");
 
-    // gret all elfs
+    // get all elfs
     const auto elfs = kittyMemMgr.elfScanner.getAllELFs();
     // get app related elfs
     // const auto elfs = kittyMemMgr.elfScanner.getAllELFs(EScanElfType::Any, EScanElfFilter::App);
@@ -266,6 +273,40 @@ int main(int argc, char *args[])
     for (const auto &it : elfs)
     {
         KITTY_LOGI("elfs(%p) -> %s", (void *)it.base(), it.realPath().c_str());
+    }
+
+    // get all soinfos
+    const auto soinfos = kittyMemMgr.linkerScanner.allSoInfo();
+    KITTY_LOGI("Found %d native soinfo", int(soinfos.size()));
+
+    // emulated soinfo
+    const auto emusoinfos = kittyMemMgr.nbScanner.allSoInfo();
+    KITTY_LOGI("Found %d emulated soinfo", int(emusoinfos.size()));
+
+    
+    KITTY_LOGI("============== App Internal Files ==============");
+
+    auto dir = KittyUtils::Android::getAppInternalDataDir(processName);
+    if (!dir.empty())
+    {
+        KITTY_LOGI("App Internal Data: %s", dir.c_str());
+
+        KittyIOFile::listFilesCallback(dir, [](const std::string &entry) -> bool {
+            KITTY_LOGI("%s", entry.c_str());
+            return false;
+        });
+    }
+
+    KITTY_LOGI("============== App External Files ==============");
+
+    dir = KittyUtils::Android::getAppExternalDataDir(processName);
+    if (!dir.empty())
+    {
+        KITTY_LOGI("App External Data: %s", dir.c_str());
+        KittyIOFile::listFilesCallback(dir, [](const std::string &entry) -> bool {
+            KITTY_LOGI("%s", entry.c_str());
+            return false;
+        });
     }
 
     KITTY_LOGI("================= PTRACE REMOTE CALL ===============");
@@ -292,10 +333,17 @@ int main(int argc, char *args[])
     KITTY_LOGI("libc [ remote_mmap = %p | remote_munmap = %p ]", (void *)remote_mmap, (void *)remote_munmap);
 
     // mmap(nullptr, KT_PAGE_SIZE, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
-    uintptr_t mmap_ret = kittyMemMgr.trace.callFunction(remote_mmap, nullptr, KT_PAGE_SIZE, PROT_READ | PROT_WRITE,
-                                                        MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
+    uintptr_t mmap_ret = kittyMemMgr.trace
+                             .callFunction(remote_mmap,
+                                           nullptr,
+                                           KT_PAGE_SIZE,
+                                           PROT_READ | PROT_WRITE,
+                                           MAP_PRIVATE | MAP_ANONYMOUS,
+                                           -1,
+                                           0)
+                             .result.ptr;
     // munmap(mmap_ret, KT_PAGE_SIZE);
-    uintptr_t munmap_ret = kittyMemMgr.trace.callFunction(remote_munmap, mmap_ret, KT_PAGE_SIZE);
+    uintptr_t munmap_ret = kittyMemMgr.trace.callFunction(remote_munmap, mmap_ret, KT_PAGE_SIZE).result.val;
 
     KITTY_LOGI("Remote call [ mmap_ret=%p | munmap_ret=%p ]", (void *)mmap_ret, (void *)munmap_ret);
 
