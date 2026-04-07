@@ -1,46 +1,66 @@
 #include "KittyUtils.hpp"
 
-#ifdef __ANDROID__
-#include <sys/system_properties.h>
-#endif
-
 namespace KittyUtils
 {
 
-#ifdef __ANDROID__
-    std::string getExternalStorage()
+    std::vector<uint8_t> randomBytes(std::size_t length)
     {
-        char *storage = getenv("EXTERNAL_STORAGE");
-        return storage ? storage : "/sdcard";
+        static std::mutex mtx;
+        std::lock_guard<std::mutex> lock(mtx);
+
+        static std::mt19937 gen{std::random_device{}()};
+
+        std::uniform_int_distribution<uint16_t> dist(0, 255);
+
+        std::vector<uint8_t> data(length);
+        for (auto &b : data)
+        {
+            b = static_cast<uint8_t>(dist(gen));
+        }
+
+        return data;
     }
 
-    int getAndroidVersion()
+    std::string randomString(size_t length)
+    {
+        static const std::string chars = "0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz";
+
+        static std::mutex mtx;
+        std::lock_guard<std::mutex> lock(mtx);
+
+        static std::default_random_engine rnd(std::random_device{}());
+
+        std::uniform_int_distribution<std::string::size_type> dist(0, chars.size() - 1);
+
+        std::string str(length, '\0');
+        for (size_t i = 0; i < length; ++i)
+            str[i] = chars[dist(rnd)];
+
+        return str;
+    }
+
+#ifdef __ANDROID__
+    int Android::getVersion()
     {
         static int ver = 0;
         if (ver > 0)
             return ver;
 
-        char buf[0xff] = {};
-        if (__system_property_get("ro.build.version.release", buf))
-            ver = std::atoi(buf);
-
+        ver = getSystemProperty<int>("ro.build.version.release", 0);
         return ver;
     }
 
-    int getAndroidSDK()
+    int Android::getSDK()
     {
         static int sdk = 0;
         if (sdk > 0)
             return sdk;
 
-        char buf[0xff] = {};
-        if (__system_property_get("ro.build.version.sdk", buf))
-            sdk = std::atoi(buf);
-
+        sdk = getSystemProperty<int>("ro.build.version.sdk", 0);
         return sdk;
     }
 
-    bool is64BitSupported()
+    bool Android::is64BitSupported()
     {
         static bool once = false;
         static bool is64 = false;
@@ -55,6 +75,46 @@ namespace KittyUtils
             once = true;
         }
         return is64;
+    }
+
+    std::string Android::getAppInternalDataDir(const std::string &packageName)
+    {
+        std::string dir = getAppInternalCacheDir(packageName);
+        if (!dir.empty())
+        {
+            return Path::fileDirectory(dir);
+        }
+        return dir;
+    }
+
+    std::string Android::getAppInternalFilesDir(const std::string &packageName)
+    {
+        std::string dir = getAppInternalCacheDir(packageName);
+        if (!dir.empty())
+        {
+            dir = Path::fileDirectory(dir);
+            dir += "/files";
+        }
+        return dir;
+    }
+
+    std::string Android::getAppInternalCacheDir(const std::string &packageName)
+    {
+        std::string dir = "/data/data/";
+        dir += packageName;
+        dir += "/cache";
+        if (access(dir.c_str(), F_OK) == 0)
+            return dir;
+
+        dir = "/data/user/";
+        dir += std::to_string(getUserId());
+        dir += "/";
+        dir += packageName;
+        dir += "/cache";
+        if (access(dir.c_str(), F_OK) == 0)
+            return dir;
+
+        return std::string();
     }
 #endif
 
@@ -117,6 +177,36 @@ namespace KittyUtils
             return str.compare(str.length() - suffix.length(), suffix.length(), suffix) == 0;
         }
         return std::equal(suffix.rbegin(), suffix.rend(), str.rbegin(), charEqualsIgnoreCase);
+    }
+
+    bool String::startsWith(const std::string &str, const std::vector<std::string> &prefixes, bool sensitive)
+    {
+        for (const auto &prefix : prefixes)
+        {
+            if (startsWith(str, prefix, sensitive))
+                return true;
+        }
+        return false;
+    }
+
+    bool String::contains(const std::string &str, const std::vector<std::string> &substrings, bool sensitive)
+    {
+        for (const auto &substring : substrings)
+        {
+            if (contains(str, substring, sensitive))
+                return true;
+        }
+        return false;
+    }
+
+    bool String::endsWith(const std::string &str, const std::vector<std::string> &suffixes, bool sensitive)
+    {
+        for (const auto &suffix : suffixes)
+        {
+            if (endsWith(str, suffix, sensitive))
+                return true;
+        }
+        return false;
     }
 
     void String::trim(std::string &str)
@@ -211,23 +301,6 @@ namespace KittyUtils
         }
 
         return true;
-    }
-
-    std::string String::random(size_t length)
-    {
-        static const std::string chars = "0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz";
-
-        static std::mutex mtx;
-        std::lock_guard<std::mutex> lock(mtx);
-
-        static std::default_random_engine rnd(std::random_device{}());
-        static std::uniform_int_distribution<std::string::size_type> dist(0, chars.size() - 1);
-
-        std::string str(length, '\0');
-        for (size_t i = 0; i < length; ++i)
-            str[i] = chars[dist(rnd)];
-
-        return str;
     }
 
     std::string String::fmt(const char *fmt, ...)
