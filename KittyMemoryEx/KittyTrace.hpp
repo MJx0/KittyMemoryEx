@@ -192,12 +192,14 @@ private:
     pid_t _pid;
     uintptr_t _defaultCaller;
     bool _attached, _seized, _autoRestoreRegs;
+    int _remoteCallTimeout;
 
     kitty_rp_call_t _callFunctionFrom(uintptr_t callerAddress, uintptr_t functionAddress, int nargs, ...);
     kitty_rp_call_t _callSyscall(long sysnr, int nargs, ...);
 
 public:
-    KittyTraceMgr() : _pid(0), _defaultCaller(0), _attached(false), _seized(false), _autoRestoreRegs(true)
+    KittyTraceMgr()
+        : _pid(0), _defaultCaller(0), _attached(false), _seized(false), _autoRestoreRegs(true), _remoteCallTimeout(0)
     {
     }
 
@@ -207,10 +209,11 @@ public:
      * @param pid The process ID to trace.
      * @param defaultCaller The default caller for remote function calls (optional).
      * @param autoRestoreRegs Whether to automatically restore registers on remote function calls (optional).
+     * @param remoteCallTimeout The default remote call timeout (optional).
      */
-    KittyTraceMgr(pid_t pid, uintptr_t defaultCaller = 0, bool autoRestoreRegs = true)
+    KittyTraceMgr(pid_t pid, uintptr_t defaultCaller = 0, bool autoRestoreRegs = true, int remoteCallTimeout = 0)
         : _pid(pid), _defaultCaller(defaultCaller), _attached(isAttached()), _seized(false),
-          _autoRestoreRegs(autoRestoreRegs)
+          _autoRestoreRegs(autoRestoreRegs), _remoteCallTimeout(remoteCallTimeout)
     {
     }
 
@@ -308,31 +311,7 @@ public:
      * @param timeout_ms timeout in milliseconds (optional, default is 0)
      * @return The PID of the process.
      */
-    inline pid_t wait(int *status, int options, int timeout_ms = 0) const
-    {
-        if (!_attached)
-            return -1;
-
-        if (timeout_ms <= 0)
-            return waitpid(_pid, status, options);
-
-        int elapsed = 0;
-        pid_t res;
-        if (!(options & WNOHANG))
-            options |= WNOHANG;
-
-        while (elapsed < timeout_ms)
-        {
-            res = waitpid(_pid, status, options);
-            if (res != 0)
-                return res;
-
-            usleep(25000);
-            elapsed += 25;
-        }
-
-        return res;
-    }
+    pid_t wait(int *status, int options, int timeout_ms = 0) const;
 
     /**
      * @brief Wait for the process to enter or exit a syscall.
@@ -514,6 +493,23 @@ public:
     inline void setAutoRestoreRegs(bool flag)
     {
         _autoRestoreRegs = flag;
+    }
+
+    /**
+     * @brief Returns the default timeout (ms) for remote function calls.
+     */
+    inline int remoteCallTimeout() const
+    {
+        return _remoteCallTimeout;
+    }
+    
+    /**
+     * @brief Sets the default remote function call timeout in milliseconds.
+     * @param ms Timeout in milliseconds (0 or negaive to disable).
+     */
+    inline void setRemoteCallTimeout(int ms)
+    {
+        _remoteCallTimeout = ms > 0 ? ms : 0;
     }
 
     /**

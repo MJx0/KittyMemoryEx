@@ -152,6 +152,32 @@ bool KittyTraceMgr::cont(int sig)
     return true;
 }
 
+pid_t KittyTraceMgr::wait(int *status, int options, int timeout_ms) const
+{
+    if (!_attached)
+        return -1;
+
+    if (timeout_ms <= 0)
+        return waitpid(_pid, status, options);
+
+    int elapsed = 0;
+    pid_t res;
+    if (!(options & WNOHANG))
+        options |= WNOHANG;
+
+    while (elapsed < timeout_ms)
+    {
+        res = waitpid(_pid, status, options);
+        if (res != 0)
+            return res;
+
+        usleep(25000);
+        elapsed += 25;
+    }
+
+    return res;
+}
+
 bool KittyTraceMgr::waitSyscall() const
 {
     if (!_attached || _pid <= 0)
@@ -533,9 +559,17 @@ kitty_rp_call_t KittyTraceMgr::_callFunctionFrom(uintptr_t callerAddress, uintpt
     {
         int status = 0;
         errno = 0;
-        pid_t wp = wait(&status, WUNTRACED);
+        pid_t wp = wait(&status, WUNTRACED, _remoteCallTimeout);
         if (wp != _pid)
         {
+            if (wp == 0)
+            {
+                stop();
+                KITTY_LOGE("callFunction(%p): timedout!", (void *)functionAddress);
+                return failure_return(KT_RP_CALL_TIMEOUT);
+                ;
+            }
+
             KITTY_LOGE("callFunction(%p): waitpid return %d. \"%s\".", (void *)functionAddress, wp, strerror(errno));
             return failure_return(KT_RP_CALL_WAIT_FAILED);
         }
@@ -594,9 +628,18 @@ kitty_rp_call_t KittyTraceMgr::_callFunctionFrom(uintptr_t callerAddress, uintpt
         auto map = KittyMemoryEx::getAddressMap(_pid, uintptr_t(si.si_addr));
         if (map.isValid())
         {
-            KITTY_LOGE("callFunction(%p): MAP(<base>+%p) %s",
+            KITTY_LOGE("callFunction(%p): Fault Map(<base>+%p) %s",
                        (void *)functionAddress,
                        (void *)((map.offset + uintptr_t(si.si_addr)) - map.startAddress),
+                       map.toString().c_str());
+        }
+
+        map = KittyMemoryEx::getAddressMap(_pid, return_regs.KT_REG_PC);
+        if (map.isValid())
+        {
+            KITTY_LOGE("callFunction(%p): PC Map(<base>+%p) %s",
+                       (void *)functionAddress,
+                       (void *)((map.offset + return_regs.KT_REG_PC) - map.startAddress),
                        map.toString().c_str());
         }
 
@@ -1259,7 +1302,7 @@ bool KittyTraceMgr::setHwBreakpoint(uintptr_t address, KT_HW_BP_TYPE type, KT_HW
         break;
     }
 
-    uint32_t privilege = (2 << 1); // Privilege Mode: 1 = Kernel, 2 = User, 3 = Any.
+    uint32_t privilege = (1 << 1); // User mode only
     uint32_t enabled = 1;          // Bit 0: Enable
     uint32_t ctrl = enabled | privilege | (type_bits << 3) | (bas << 5);
 
@@ -1292,7 +1335,7 @@ bool KittyTraceMgr::setHwBreakpoint(uintptr_t address, KT_HW_BP_TYPE type, KT_HW
 
 #elif defined(__x86_64__) || defined(__i386__)
     // Set Address in DR0-DR3
-    if (ptrace(PTRACE_POKEUSER, tid, offsetof(struct user, u_debugreg[slot]), address) == -1L)
+    if (ptrace(PTRACE_POKEUSER, tid, offsetof(struct user, u_debugreg) + slot * sizeof(((struct user*)0)->u_debugreg[0]), address) == -1L)
         return false;
 
     // Retrieve current DR7 to avoid overwriting other slots
@@ -1318,13 +1361,36 @@ bool KittyTraceMgr::setHwBreakpoint(uintptr_t address, KT_HW_BP_TYPE type, KT_HW
     }
 
     // Configure length
-    unsigned long len_bits = type == KT_HW_BP_EXECUTE ? 0 : ((int(size) == 8) ? 2 : (int(size) - 1));
+    unsigned long len_bits = 0;
+    if (type != KT_HW_BP_EXECUTE)
+    {
+        if (address % size != 0)
+            return false;
+
+        switch (size)
+        {
+        case 1:
+            len_bits = 0;
+            break;
+        case 2:
+            len_bits = 1;
+            break;
+        case 4:
+            len_bits = 3;
+            break;
+        case 8:
+            len_bits = 2;
+            break; // x64 only
+        default:
+            return false;
+        }
+    }
 
     int l_bit = (slot * 2);        // Local Enable bits are 0, 2, 4, 6
     int rw_bit = 16 + (slot * 4);  // RW bits are 16, 20, 24, 28
     int len_bit = 18 + (slot * 4); // LEN bits are 18, 22, 26, 30
 
-    dr7 &= ~((3UL << rw_bit) | (3UL << len_bit) | (3UL << l_bit));         // Clear slot
+    dr7 &= ~((3UL << rw_bit) | (3UL << len_bit) | (1UL << l_bit));         // Clear slot
     dr7 |= (type_bits << rw_bit) | (len_bits << len_bit) | (1UL << l_bit); // Set slot
 
     // Update DR7
@@ -1367,22 +1433,26 @@ bool KittyTraceMgr::clearHwBreakpoint(KT_HW_BP_TYPE type, int slot)
     return ptrace(PTRACE_SETREGSET, tid, regset, &iov) != -1L;
 
 #elif defined(__x86_64__) || defined(__i386__)
-    ptrace(PTRACE_POKEUSER, tid, offsetof(struct user, u_debugreg[6]), 0);
-
-    ptrace(PTRACE_POKEUSER, tid, offsetof(struct user, u_debugreg[slot]), 0);
-
     errno = 0;
     unsigned long dr7 = ptrace(PTRACE_PEEKUSER, tid, offsetof(struct user, u_debugreg[7]), 0);
     if (dr7 == ((unsigned long)-1) && errno != 0)
         return false;
 
-    // 3. Clear L/G enable bits (bits 0-7)
+    // Clear L/G enable bits (bits 0-7)
     dr7 &= ~(3UL << (slot * 2));
 
-    // 4. Clear RW/LEN bits (bits 16-31)
+    // Clear RW/LEN bits (bits 16-31)
     // Each slot has 4 bits of config starting at bit 16
     dr7 &= ~(0xFUL << (16 + (slot * 4)));
 
-    return ptrace(PTRACE_POKEUSER, tid, offsetof(struct user, u_debugreg[7]), dr7) != -1;
+    if (ptrace(PTRACE_POKEUSER, tid, offsetof(struct user, u_debugreg[7]), dr7) == -1L)
+        return false;
+
+    if (ptrace(PTRACE_POKEUSER, tid, offsetof(struct user, u_debugreg) + slot * sizeof(((struct user*)0)->u_debugreg[0]), 0) == -1L)
+        return false;
+
+    ptrace(PTRACE_POKEUSER, tid, offsetof(struct user, u_debugreg[6]), 0);
+
+    return true;
 #endif
 }
