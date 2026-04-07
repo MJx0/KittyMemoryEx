@@ -735,6 +735,14 @@ public:
     bool init();
 
     /**
+     * @brief Returns true if initialized, false otherwise.
+     */
+    inline bool isInitialized() const
+    {
+        return isValid() && _init;
+    }
+
+    /**
      * @brief Converts the LinkerScannerMgr object to an ElfScanner pointer.
      * @return The ElfScanner pointer.
      */
