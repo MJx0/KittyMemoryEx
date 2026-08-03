@@ -2,16 +2,21 @@
 
 #include <link.h>
 
-#include "KittyUtils.hpp"
-#include "KittyMemoryEx.hpp"
-#include "KittyMemOp.hpp"
-
 #include <cstddef>
 #include <cstdint>
 #include <mutex>
 #include <unordered_map>
 #include <functional>
 #include <utility>
+#include <vector>
+#include <string>
+#include <algorithm>
+
+#include "KittyUtils.hpp"
+#include "KittyMemoryEx.hpp"
+#include "KittyMemOp.hpp"
+
+#define KT_SCANNER_CHUNK_SIZE ((size_t)(1024 * 1024))
 
 /**
  * @brief Manager class for pattern scanning operations.
@@ -45,8 +50,8 @@ public:
      *
      * @return A vector containing all addresses where the bytes were found.
      */
-    std::vector<uintptr_t> findBytesAll(const uintptr_t start,
-                                        const uintptr_t end,
+    std::vector<uintptr_t> findBytesAll(uintptr_t start,
+                                        uintptr_t end,
                                         const char *bytes,
                                         const std::string &mask) const;
 
@@ -60,10 +65,7 @@ public:
      *
      * @return The first address where the bytes were found, or `0` if not found.
      */
-    uintptr_t findBytesFirst(const uintptr_t start,
-                             const uintptr_t end,
-                             const char *bytes,
-                             const std::string &mask) const;
+    uintptr_t findBytesFirst(uintptr_t start, uintptr_t end, const char *bytes, const std::string &mask) const;
 
     /**
      * @brief Searches for hex within a remote memory range and returns all results.
@@ -75,10 +77,7 @@ public:
      *
      * @return A vector containing all addresses where the hex was found.
      */
-    std::vector<uintptr_t> findHexAll(const uintptr_t start,
-                                      const uintptr_t end,
-                                      std::string hex,
-                                      const std::string &mask) const;
+    std::vector<uintptr_t> findHexAll(uintptr_t start, uintptr_t end, std::string hex, const std::string &mask) const;
 
     /**
      * @brief Searches for hex within a remote memory range and returns the first result.
@@ -90,7 +89,7 @@ public:
      *
      * @return The first address where the hex was found, or `0` if not found.
      */
-    uintptr_t findHexFirst(const uintptr_t start, const uintptr_t end, std::string hex, const std::string &mask) const;
+    uintptr_t findHexFirst(uintptr_t start, uintptr_t end, std::string hex, const std::string &mask) const;
 
     /**
      * @brief Searches for a pattern within a remote memory range using the IDA pattern syntax and returns all results.
@@ -101,7 +100,7 @@ public:
      *
      * @return A vector containing all addresses where the pattern was found.
      */
-    std::vector<uintptr_t> findIdaPatternAll(const uintptr_t start, const uintptr_t end, const std::string &pattern);
+    std::vector<uintptr_t> findIdaPatternAll(uintptr_t start, uintptr_t end, const std::string &pattern) const;
 
     /**
      * @brief Searches for a pattern within a remote memory range using the IDA pattern syntax and returns the first result.
@@ -112,7 +111,7 @@ public:
      *
      * @return The first address where the pattern was found, or `0` if not found.
      */
-    uintptr_t findIdaPatternFirst(const uintptr_t start, const uintptr_t end, const std::string &pattern);
+    uintptr_t findIdaPatternFirst(uintptr_t start, uintptr_t end, const std::string &pattern) const;
 
     /**
      * @brief Searches for data within a remote memory range and returns all results.
@@ -124,7 +123,7 @@ public:
      *
      * @return A vector containing all addresses where the data was found.
      */
-    std::vector<uintptr_t> findDataAll(const uintptr_t start, const uintptr_t end, const void *data, size_t size) const;
+    std::vector<uintptr_t> findDataAll(uintptr_t start, uintptr_t end, const void *data, size_t size) const;
 
     /**
      * @brief Searches for data within a remote memory range and returns the first result.
@@ -136,7 +135,7 @@ public:
      *
      * @return The first address where the data was found, or `0` if not found.
      */
-    uintptr_t findDataFirst(const uintptr_t start, const uintptr_t end, const void *data, size_t size) const;
+    uintptr_t findDataFirst(uintptr_t start, uintptr_t end, const void *data, size_t size) const;
 };
 
 #ifdef __ANDROID__
@@ -683,16 +682,32 @@ struct kitty_linker_syms_t
  */
 struct kitty_soinfo_offsets_t
 {
-    uintptr_t base = 0;
-    uintptr_t size = 0;
-    uintptr_t phdr = 0;
-    uintptr_t phnum = 0;
-    uintptr_t dyn = 0;
-    uintptr_t strtab = 0;
-    uintptr_t symtab = 0;
-    uintptr_t strsz = 0;
-    uintptr_t bias = 0;
-    uintptr_t next = 0;
+    /**
+     * @brief Sentinel used for "offset not found yet", so a legitimately
+     * discovered offset of 0 can't be confused with "not found".
+     */
+    static constexpr uintptr_t noff = uintptr_t(-1);
+
+    uintptr_t base = noff;
+    uintptr_t size = noff;
+    uintptr_t phdr = noff;
+    uintptr_t phnum = noff;
+    uintptr_t dyn = noff;
+    uintptr_t strtab = noff;
+    uintptr_t symtab = noff;
+    uintptr_t strsz = noff;
+    uintptr_t bias = noff;
+    uintptr_t next = noff;
+
+    /**
+     * @brief Returns true if all offsets required to walk/parse soinfo structures were found.
+     * @note @ref strsz is optional and not required for validity.
+     */
+    inline bool isValid() const
+    {
+        return phdr != noff && phnum != noff && base != noff && size != noff && dyn != noff && strtab != noff &&
+               symtab != noff && bias != noff && next != noff;
+    }
 };
 
 /**

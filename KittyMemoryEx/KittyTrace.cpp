@@ -462,7 +462,14 @@ kitty_rp_call_t KittyTraceMgr::_callFunctionFrom(uintptr_t callerAddress, uintpt
     tmp_regs.KT_REG_PC = functionAddress;
 
     // Setup the current processor status register
-#if defined(__arm__)
+#if defined(__aarch64__)
+    // Clear Single-step (Bit 21) and Debug Exception (Bit 9)
+    tmp_regs.pstate &= ~KT_CPSR_SS_MASK;
+    tmp_regs.pstate &= ~KT_CPSR_D_MASK;
+
+    // Clear BTYPE (Bits 10 & 11) to bypass BTI enforcement
+    tmp_regs.pstate &= ~KT_CPSR_BTYPE_MASK;
+#elif defined(__arm__)
     if (tmp_regs.KT_REG_PC & 1)
     {
         // thumb
@@ -567,7 +574,6 @@ kitty_rp_call_t KittyTraceMgr::_callFunctionFrom(uintptr_t callerAddress, uintpt
                 stop();
                 KITTY_LOGE("callFunction(%p): timedout!", (void *)functionAddress);
                 return failure_return(KT_RP_CALL_TIMEOUT);
-                ;
             }
 
             KITTY_LOGE("callFunction(%p): waitpid return %d. \"%s\".", (void *)functionAddress, wp, strerror(errno));
@@ -706,23 +712,37 @@ kitty_rp_call_t KittyTraceMgr::_callSyscall(long sysnr, int nargs, ...)
 
     uintptr_t target_pc_mem = tmp_regs.KT_REG_PC;
     std::vector<uint8_t> syscall_code;
+    std::vector<uint8_t> backup_code;
+    if (_syscallGadget != 0)
+    {
+        KITTY_LOGD("callSyscall(%d) using syscall gadget at %p", int(sysnr), (void *)_syscallGadget);
+        tmp_regs.KT_REG_PC = _syscallGadget;
+    }
+    else
+    {
+        if (!KittyMemoryEx::getAddressMap(_pid, target_pc_mem).executable)
+        {
+            KITTY_LOGE("callSyscall(%d): PC(%p) is not in executable memory region!", int(sysnr), (void *)target_pc_mem);
+            return {KT_RP_CALL_MEM_FAILED, {0}};
+        }
 
 #if defined(__arm__)
-    bool thumb = (target_pc_mem & 1) != 0 || (tmp_regs.KT_REG_CPSR & KT_CPSR_T_MASK) != 0;
-    target_pc_mem &= ~1;
-    if (thumb)
-        syscall_code.assign(std::begin(KittyTraceInsns::THUMB_SYSCALL), std::end(KittyTraceInsns::THUMB_SYSCALL));
-    else
-        syscall_code.assign(std::begin(KittyTraceInsns::SYSCALL), std::end(KittyTraceInsns::SYSCALL));
+        bool thumb = (target_pc_mem & 1) != 0 || (tmp_regs.KT_REG_CPSR & KT_CPSR_T_MASK) != 0;
+        target_pc_mem &= ~1;
+        if (thumb)
+            syscall_code.assign(std::begin(KittyTraceInsns::THUMB_SYSCALL), std::end(KittyTraceInsns::THUMB_SYSCALL));
+        else
+            syscall_code.assign(std::begin(KittyTraceInsns::SYSCALL), std::end(KittyTraceInsns::SYSCALL));
 #else
-    syscall_code.assign(std::begin(KittyTraceInsns::SYSCALL), std::end(KittyTraceInsns::SYSCALL));
+        syscall_code.assign(std::begin(KittyTraceInsns::SYSCALL), std::end(KittyTraceInsns::SYSCALL));
 #endif
 
-    std::vector<uint8_t> backup_code(syscall_code.size(), 0);
-    if (!peekMem(target_pc_mem, backup_code.data(), backup_code.size()))
-    {
-        KITTY_LOGE("callSyscall(%d): Failed to backup PC(%p) memory code.", int(sysnr), (void *)target_pc_mem);
-        return {KT_RP_CALL_MEM_FAILED, {0}};
+        backup_code.resize(syscall_code.size(), 0);
+        if (!peekMem(target_pc_mem, backup_code.data(), backup_code.size()))
+        {
+            KITTY_LOGE("callSyscall(%d): Failed to backup PC(%p) memory code.", int(sysnr), (void *)target_pc_mem);
+            return {KT_RP_CALL_MEM_FAILED, {0}};
+        }
     }
 
     // cleanup failure return
@@ -732,9 +752,33 @@ kitty_rp_call_t KittyTraceMgr::_callSyscall(long sysnr, int nargs, ...)
         if (_autoRestoreRegs)
             setRegs(&backup_regs);
 
-        pokeMem(target_pc_mem, backup_code.data(), backup_code.size());
+        if (_syscallGadget == 0)
+        {
+            pokeMem(target_pc_mem, backup_code.data(), backup_code.size());
+        }
         return {s, {0}};
     };
+
+#if defined(__aarch64__)
+    // Clear Single-step (Bit 21) and Debug Exception (Bit 9)
+    // tmp_regs.pstate &= ~KT_CPSR_SS_MASK;
+    // tmp_regs.pstate &= ~KT_CPSR_D_MASK;
+
+    // Clear BTYPE (Bits 10 & 11) to bypass BTI enforcement
+    tmp_regs.pstate &= ~KT_CPSR_BTYPE_MASK;
+#elif defined(__arm__)
+    if (tmp_regs.KT_REG_PC & 1)
+    {
+        // thumb
+        tmp_regs.KT_REG_PC &= (~1u);
+        tmp_regs.KT_REG_CPSR |= KT_CPSR_T_MASK;
+    }
+    else
+    {
+        // arm
+        tmp_regs.KT_REG_CPSR &= ~KT_CPSR_T_MASK;
+    }
+#endif
 
 #if defined(__arm__) || defined(__aarch64__)
     for (int i = 0; i < 6; i++)
@@ -768,12 +812,15 @@ kitty_rp_call_t KittyTraceMgr::_callSyscall(long sysnr, int nargs, ...)
 
     tmp_regs.KT_REG_SYSNR = sysnr;
 
-    if (!pokeMem(target_pc_mem, syscall_code.data(), syscall_code.size()))
+    if (_syscallGadget == 0)
     {
-        KITTY_LOGE("callSyscall(%d): Failed to write syscall code into PC(%p) memory.",
-                   int(sysnr),
-                   (void *)target_pc_mem);
-        return {KT_RP_CALL_MEM_FAILED, {0}};
+        if (!pokeMem(target_pc_mem, syscall_code.data(), syscall_code.size()))
+        {
+            KITTY_LOGE("callSyscall(%d): Failed to write syscall code into PC(%p) memory.",
+                       int(sysnr),
+                       (void *)target_pc_mem);
+            return {KT_RP_CALL_MEM_FAILED, {0}};
+        }
     }
 
     // Set new registers
@@ -861,9 +908,12 @@ kitty_rp_call_t KittyTraceMgr::_callSyscall(long sysnr, int nargs, ...)
 
     kitty_rp_call_t result = {KT_RP_CALL_SUCCESS, {static_cast<intptr_t>(return_regs.KT_REG_RET)}};
 
-    if (!pokeMem(target_pc_mem, backup_code.data(), backup_code.size()))
+    if (_syscallGadget == 0)
     {
-        KITTY_LOGW("callSyscall(%d): Failed to restore PC(%p) memory code!", int(sysnr), (void *)target_pc_mem);
+        if (!pokeMem(target_pc_mem, backup_code.data(), backup_code.size()))
+        {
+            KITTY_LOGW("callSyscall(%d): Failed to restore PC(%p) memory code!", int(sysnr), (void *)target_pc_mem);
+        }
     }
 
     // Restore regs
@@ -1335,7 +1385,10 @@ bool KittyTraceMgr::setHwBreakpoint(uintptr_t address, KT_HW_BP_TYPE type, KT_HW
 
 #elif defined(__x86_64__) || defined(__i386__)
     // Set Address in DR0-DR3
-    if (ptrace(PTRACE_POKEUSER, tid, offsetof(struct user, u_debugreg) + slot * sizeof(((struct user*)0)->u_debugreg[0]), address) == -1L)
+    if (ptrace(PTRACE_POKEUSER,
+               tid,
+               offsetof(struct user, u_debugreg) + slot * sizeof(((struct user *)0)->u_debugreg[0]),
+               address) == -1L)
         return false;
 
     // Retrieve current DR7 to avoid overwriting other slots
@@ -1448,7 +1501,10 @@ bool KittyTraceMgr::clearHwBreakpoint(KT_HW_BP_TYPE type, int slot)
     if (ptrace(PTRACE_POKEUSER, tid, offsetof(struct user, u_debugreg[7]), dr7) == -1L)
         return false;
 
-    if (ptrace(PTRACE_POKEUSER, tid, offsetof(struct user, u_debugreg) + slot * sizeof(((struct user*)0)->u_debugreg[0]), 0) == -1L)
+    if (ptrace(PTRACE_POKEUSER,
+               tid,
+               offsetof(struct user, u_debugreg) + slot * sizeof(((struct user *)0)->u_debugreg[0]),
+               0) == -1L)
         return false;
 
     ptrace(PTRACE_POKEUSER, tid, offsetof(struct user, u_debugreg[6]), 0);

@@ -25,8 +25,14 @@
 #define user_regs_struct user_regs
 #endif
 
-#if defined(__aarch64__) || defined(__arm__)
-#define KT_CPSR_T_MASK (1u << 5)
+#if defined(__arm__)
+#define KT_CPSR_T_MASK (1u << 5) // Thumb bit (Bit 5)
+#endif
+
+#if defined(__aarch64__)
+#define KT_CPSR_SS_MASK (1ULL << 21)    // Single-step bit (Bit 21)
+#define KT_CPSR_D_MASK (1ULL << 9)      // Debug bit (Bit 9)
+#define KT_CPSR_BTYPE_MASK (3ULL << 10) // BTYPE bits (Bits 10 & 11)
 #endif
 
 #if defined(__i386__)
@@ -193,13 +199,14 @@ private:
     uintptr_t _defaultCaller;
     bool _attached, _seized, _autoRestoreRegs;
     int _remoteCallTimeout;
+    uintptr_t _syscallGadget;
 
     kitty_rp_call_t _callFunctionFrom(uintptr_t callerAddress, uintptr_t functionAddress, int nargs, ...);
     kitty_rp_call_t _callSyscall(long sysnr, int nargs, ...);
 
 public:
     KittyTraceMgr()
-        : _pid(0), _defaultCaller(0), _attached(false), _seized(false), _autoRestoreRegs(true), _remoteCallTimeout(0)
+        : _pid(0), _defaultCaller(0), _attached(false), _seized(false), _autoRestoreRegs(true), _remoteCallTimeout(0), _syscallGadget(0)
     {
     }
 
@@ -211,9 +218,9 @@ public:
      * @param autoRestoreRegs Whether to automatically restore registers on remote function calls (optional).
      * @param remoteCallTimeout The default remote call timeout (optional).
      */
-    KittyTraceMgr(pid_t pid, uintptr_t defaultCaller = 0, bool autoRestoreRegs = true, int remoteCallTimeout = 0)
+    KittyTraceMgr(pid_t pid, uintptr_t defaultCaller = 0, bool autoRestoreRegs = true, int remoteCallTimeout = 0, uintptr_t syscallGadget = 0)
         : _pid(pid), _defaultCaller(defaultCaller), _attached(isAttached()), _seized(false),
-          _autoRestoreRegs(autoRestoreRegs), _remoteCallTimeout(remoteCallTimeout)
+          _autoRestoreRegs(autoRestoreRegs), _remoteCallTimeout(remoteCallTimeout), _syscallGadget(syscallGadget)
     {
     }
 
@@ -271,25 +278,6 @@ public:
      * @return True if the detach was successful, false otherwise.
      */
     bool detach();
-
-    /**
-     * @brief Stop all of traced process threads.
-     * @return True if the stop was successful, false otherwise.
-     */
-    inline bool stopAllThreads()
-    {
-        return kill(_pid, SIGSTOP) != -1;
-    }
-
-    /**
-     * @brief Continue all of the traced process threads.
-     * @param sig Signal to send to the process (optional).
-     * @return True if the continue was successful, false otherwise.
-     */
-    inline bool contAllThreads()
-    {
-        return kill(_pid, SIGCONT) != -1;
-    }
 
     /**
      * @brief Stop the traced process thread.
@@ -502,7 +490,7 @@ public:
     {
         return _remoteCallTimeout;
     }
-    
+
     /**
      * @brief Sets the default remote function call timeout in milliseconds.
      * @param ms Timeout in milliseconds (0 or negaive to disable).
@@ -510,6 +498,23 @@ public:
     inline void setRemoteCallTimeout(int ms)
     {
         _remoteCallTimeout = ms > 0 ? ms : 0;
+    }
+
+    /**
+     * @brief Returns the syscall gadget address for remote syscalls.
+     */
+    inline uintptr_t syscallGadget() const
+    {
+        return _syscallGadget;
+    }
+
+    /**
+     * @brief Sets the syscall gadget address for remote syscalls.
+     * @param address The address of syscall gadget.
+     */
+    inline void setSyscallGadget(uintptr_t address)
+    {
+        _syscallGadget = address;
     }
 
     /**
@@ -539,7 +544,7 @@ public:
 
     /**
      * @brief Call a syscall in the remote process.
-     * @note This function writes syscall + brkp instructions at PC/IP so PC/IP must be at valid executable address.
+     * @note If syscall gadget was not set then this function will write syscall instruction at PC/IP so PC/IP must be at valid executable address.
      * @param sysnr The syscall number.
      * @param ... Arguments to pass to the syscall.
      * @return The result of the syscall.

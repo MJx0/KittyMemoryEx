@@ -42,19 +42,20 @@ int main(int argc, char *args[])
 
     KITTY_LOGI("================ GET ELF BASE ===============");
 
+    std::string targetLib = "libil2cpp.so";
     ElfScanner g_il2cppElf{};
     // loop until our target library is found
     do
     {
         sleep(1);
         // findElf can find libs in split apk too
-        g_il2cppElf = kittyMemMgr.elfScanner.findElf("libil2cpp.so");
+        g_il2cppElf = kittyMemMgr.elfScanner.findElf(targetLib);
         // use filter
-        g_il2cppElf = kittyMemMgr.elfScanner.findElf("libil2cpp.so", EScanElfType::Any, EScanElfFilter::App);
+        g_il2cppElf = kittyMemMgr.elfScanner.findElf(targetLib, EScanElfType::Any, EScanElfFilter::App);
 
         // find via linker or native bridge solist
-        auto nativeSo = kittyMemMgr.linkerScanner.findSoInfo("libil2cpp.so");
-        auto emulatedSo = kittyMemMgr.nbScanner.findSoInfo("libil2cpp.so");
+        auto nativeSo = kittyMemMgr.linkerScanner.findSoInfo(targetLib);
+        auto emulatedSo = kittyMemMgr.nbScanner.findSoInfo(targetLib);
 
         if (nativeSo.ptr)
         {
@@ -128,6 +129,8 @@ int main(int argc, char *args[])
     // read & write memory (address, buffer, buffer_size)
     char magic[16] = {0};
     size_t bytesRead = kittyMemMgr.readMem(il2cppBase, magic, sizeof(magic));
+    // SkipInaccessiblePages mode
+    // size_t bytesRead = kittyMemMgr.readMem(il2cppBase, magic, sizeof(magic), MemMode::SkipInaccessiblePages);
     KITTY_LOGI("bytesRead: 0x%zx", bytesRead);
     // size_t bytesWritten = kittyMemMgr.writeMem(il2cppBase, magic, sizeof(magic));
     // KITTY_LOGI("bytesWritten: 0x%zx", bytesRead);
@@ -135,6 +138,53 @@ int main(int argc, char *args[])
     // read & write string from memory (magic + 1) = "ELF"
     // kittyMemMgr.readMemStr(il2cppBase + 1, 3);
     // kittyMemMgr.writeMemStr(il2cppBase + 1, magic + 1, 3);
+
+    KITTY_LOGI("============= FIND / DUMP MEMORY MAPPED FILES =============");
+
+    // better to search late into the game to get finalized metadata regions
+    // if there are multiple mappings, in most cases choose the one that's closes to original file size on disk
+    {
+        auto unityMetadataMappings = KittyMemoryEx::getFileMappings(processID, "global-metadata.dat");
+        KITTY_LOGI("unityMetadataMappings: %d", int(unityMetadataMappings.size()));
+        for (size_t i = 0; i < unityMetadataMappings.size(); i++)
+        {
+            uintptr_t start = unityMetadataMappings[i].front().startAddress;
+            uintptr_t end = unityMetadataMappings[i].back().endAddress;
+            KITTY_LOGI("unityMetadataMappings[%d]: %p - %p", int(i), (void *)start, (void *)end);
+        }
+
+        std::string dataDir = KittyUtils::Android::getAppExternalDataDir(processName);
+        if (dataDir.empty())
+            dataDir = KittyUtils::Android::getAppInternalDataDir(processName);
+
+        std::string dumpDir = KittyUtils::String::fmt("%s/%s", dataDir.c_str(), "Dump");
+        KittyIOFile::createDirectoryRecursive(dumpDir);
+
+        // dump metadata
+        std::string dumpDatPath = KittyUtils::String::fmt("%s/global-metadata.dat", dumpDir.c_str());
+        if (kittyMemMgr.dumpMemFileMappings("global-metadata.dat", dumpDatPath.c_str()))
+        {
+            KITTY_LOGI("Dumped Unity metadata mappings at %s", dumpDir.c_str());
+        }
+        else
+        {
+            KITTY_LOGI("Failed to dump Unity metadata!");
+        }
+
+        // dump lib.so
+        std::string dumpSoPath = KittyUtils::String::fmt("%s/libil2cpp_%p-%p.so",
+                                                         dumpDir.c_str(),
+                                                         (void *)g_il2cppElf.base(),
+                                                         (void *)g_il2cppElf.end());
+        if (kittyMemMgr.dumpMemELF(g_il2cppElf, dumpSoPath))
+        {
+            KITTY_LOGI("Dumped Unity libil2cpp.so at %s", dumpDir.c_str());
+        }
+        else
+        {
+            KITTY_LOGI("Failed to dump Unity libil2cpp.so!");
+        }
+    }
 
     KITTY_LOGI("==================== MEMORY PATCH ===================");
 
@@ -160,6 +210,7 @@ int main(int argc, char *args[])
 
     // format asm
     auto asm_fmt = KittyUtils::String::fmt("mov x0, #%d; ret", 65536);
+    
     get_gold = kittyMemMgr.memPatch.createWithAsm(il2cppBase + 0x10948D4, MP_ASM_ARM64, asm_fmt);
 #endif
 
@@ -180,23 +231,6 @@ int main(int argc, char *args[])
         KITTY_LOGI("get_canShoot has been restored successfully");
         KITTY_LOGI("Current Bytes: %s", get_canShoot.get_CurrBytes().c_str());
     }
-
-
-    KITTY_LOGI("==================== MEMORY DUMP ====================");
-
-    std::string dumpFolder = KittyUtils::Android::getExternalStorage();
-    bool isDumped = false;
-
-    // dump memory elf
-    std::string sodumpPath = dumpFolder + "/il2cpp_dump.so";
-    isDumped = kittyMemMgr.dumpMemELF(g_il2cppElf, sodumpPath);
-    KITTY_LOGI("il2cpp so dump = %d", isDumped ? 1 : 0);
-
-    // dump memory file
-    std::string datdumpPath = dumpFolder + "/global-metadata.dat";
-    isDumped = kittyMemMgr.dumpMemFile("global-metadata.dat", datdumpPath);
-    KITTY_LOGI("metadata dump = %d", isDumped ? 1 : 0);
-
 
     KITTY_LOGI("==================== PATTERN SCAN ===================");
 
@@ -283,29 +317,34 @@ int main(int argc, char *args[])
     const auto emusoinfos = kittyMemMgr.nbScanner.allSoInfo();
     KITTY_LOGI("Found %d emulated soinfo", int(emusoinfos.size()));
 
-    
+
     KITTY_LOGI("============== App Internal Files ==============");
+
+    int files = 0;
 
     auto dir = KittyUtils::Android::getAppInternalDataDir(processName);
     if (!dir.empty())
     {
         KITTY_LOGI("App Internal Data: %s", dir.c_str());
-
-        KittyIOFile::listFilesCallback(dir, [](const std::string &entry) -> bool {
+        // print 10 files
+        KittyIOFile::listFilesCallback(dir, [&files](const std::string &entry) -> bool {
             KITTY_LOGI("%s", entry.c_str());
-            return false;
+            return ++files >= 10;
         });
     }
 
     KITTY_LOGI("============== App External Files ==============");
 
+    files = 0;
+
     dir = KittyUtils::Android::getAppExternalDataDir(processName);
     if (!dir.empty())
     {
         KITTY_LOGI("App External Data: %s", dir.c_str());
-        KittyIOFile::listFilesCallback(dir, [](const std::string &entry) -> bool {
+        // print 10 files
+        KittyIOFile::listFilesCallback(dir, [&files](const std::string &entry) -> bool {
             KITTY_LOGI("%s", entry.c_str());
-            return false;
+            return ++files >= 10;
         });
     }
 

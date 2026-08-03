@@ -1,5 +1,4 @@
 #include "KittyMemoryMgr.hpp"
-#include "KittyMemoryEx.hpp"
 
 bool KittyMemoryMgr::initialize(pid_t pid, EKittyMemOP eMemOp, bool initMemPatch)
 {
@@ -90,38 +89,6 @@ bool KittyMemoryMgr::initialize(pid_t pid, EKittyMemOP eMemOp, bool initMemPatch
     return true;
 }
 
-size_t KittyMemoryMgr::readMem(uintptr_t address, void *buffer, size_t len) const
-{
-    if (!isMemValid() || !buffer || !len)
-        return 0;
-
-    return _pMemOp->Read(address, buffer, len);
-}
-
-size_t KittyMemoryMgr::writeMem(uintptr_t address, void *buffer, size_t len) const
-{
-    if (!isMemValid() || !buffer || !len)
-        return 0;
-
-    return _pMemOp->Write(address, buffer, len);
-}
-
-std::string KittyMemoryMgr::readMemStr(uintptr_t address, size_t maxLen) const
-{
-    if (!isMemValid() || !address || !maxLen)
-        return "";
-
-    return _pMemOp->ReadStr(address, maxLen);
-}
-
-bool KittyMemoryMgr::writeMemStr(uintptr_t address, std::string str) const
-{
-    if (!isMemValid() || !address || str.empty())
-        return false;
-
-    return _pMemOp->WriteStr(address, str);
-}
-
 bool KittyMemoryMgr::dumpMemRange(uintptr_t start, uintptr_t end, const std::string &destination) const
 {
     if (!isMemValid())
@@ -129,64 +96,126 @@ bool KittyMemoryMgr::dumpMemRange(uintptr_t start, uintptr_t end, const std::str
 
     if (start >= end)
     {
-        KITTY_LOGE("dumpMemRange: start(%p) is equal or greater than end(%p).", (void *)start, (void *)end);
+        KITTY_LOGE("dumpMemRange: Invalid range %p-%p.", (void *)start, (void *)end);
         return false;
     }
 
-    bool ok = false;
-    std::vector<char> memBuffer(end - start, 0);
-    if (_eMemOp == EK_MEM_OP_IO)
+    KittyMemIO memIO;
+    if (!memIO.init(_pid))
     {
-        ok = _pMemOp->Read(start, memBuffer.data(), memBuffer.size()) > 0x1000;
-    }
-    else
-    {
-        KittyMemIO memIO = {};
-        if (memIO.init(_pid))
-        {
-            ok = memIO.Read(start, memBuffer.data(), memBuffer.size()) > 0x1000;
-        }
+        KITTY_LOGE("dumpMemRange: Failed to access process memory (%s).", strerror(memIO.lastErrno()));
+        return false;
     }
 
-    if (ok)
+    KittyIOFile destIO(destination, O_WRONLY | O_CREAT | O_TRUNC | O_CLOEXEC, 0666);
+    if (!destIO.open())
     {
-        KittyIOFile destIO(destination, O_WRONLY | O_CREAT | O_TRUNC | O_CLOEXEC, 0666);
-        if (destIO.open())
+        KITTY_LOGE("dumpMemRange: failed opening destination (%s).", destIO.lastStrError().c_str());
+        return false;
+    }
+
+    std::vector<char> buffer(KT_IO_CHUNK_SIZE);
+    uintptr_t current = start;
+
+    while (current < end)
+    {
+        size_t chunkSize = std::min<size_t>(KT_IO_CHUNK_SIZE, end - current);
+
+        /*
+         * Keep inaccessible memory as zero bytes.
+         * This preserves the original virtual offsets.
+         */
+        memset(buffer.data(), 0, chunkSize);
+
+        memIO.Read(current, buffer.data(), chunkSize, MemMode::SkipInaccessiblePages);
+
+        /*
+         * Always write the full chunk.
+         */
+        size_t written = destIO.write(buffer.data(), chunkSize);
+
+        if (written != chunkSize)
         {
-            ok = destIO.write(memBuffer.data(), memBuffer.size()) > 0x1000;
+            KITTY_LOGE("dumpMemRange: Write failed at %p (%zu/%zu).", (void *)current, written, chunkSize);
             destIO.close();
-            return ok;
+            return false;
         }
+
+        current += chunkSize;
     }
 
-    return false;
+    destIO.close();
+    return true;
 }
 
-bool KittyMemoryMgr::dumpMemFile(const std::string &memFile, const std::string &destination) const
+bool KittyMemoryMgr::dumpMemFileMappings(const std::string &memFile, const std::string &destination) const
 {
     if (!isMemValid() || memFile.empty() || destination.empty())
         return false;
 
-    auto fileMaps = KittyMemoryEx::getMaps(_pid, EProcMapFilter::EndWith, memFile);
-    if (fileMaps.empty())
+    auto fileMappings = KittyMemoryEx::getFileMappings(_pid, memFile);
+    if (fileMappings.empty())
         return false;
 
-    auto firstMap = fileMaps.front();
-    uintptr_t lastEnd = firstMap.endAddress;
+    std::string outPath = destination;
+    kt_stat64_t st{};
 
-    for (size_t i = 1; i < fileMaps.size(); ++i)
+    if (kt_stat64(destination.c_str(), &st) == 0 && S_ISDIR(st.st_mode))
     {
-        const auto &it = fileMaps[i];
-        if (firstMap.inode != 0 && it.inode == firstMap.inode && it.startAddress == lastEnd)
+        // Destination is an existing directory.
+        if (access(destination.c_str(), W_OK) != 0)
+            return false;
+
+        size_t pos = memFile.find_last_of("/\\");
+        outPath += (outPath.back() == '/' || outPath.back() == '\\') ? "" : "/";
+        outPath += (pos == std::string::npos) ? memFile : memFile.substr(pos + 1);
+    }
+    else
+    {
+        // Destination is a file path.
+        if (kt_stat64(outPath.c_str(), &st) == 0)
         {
-            lastEnd = it.endAddress;
-            continue;
+            // Existing file: must be writable.
+            if (access(outPath.c_str(), W_OK) != 0)
+                return false;
         }
-        break;
+        else
+        {
+            // New file: parent directory must be writable.
+            size_t pos = outPath.find_last_of("/\\");
+            std::string parent = (pos == std::string::npos) ? "." : outPath.substr(0, pos);
+
+            if (access(parent.c_str(), W_OK) != 0)
+                return false;
+        }
     }
 
-    return dumpMemRange(firstMap.startAddress, lastEnd, destination);
+    bool dumpedAtLeastOne = false;
+
+    for (size_t i = 0; i < fileMappings.size(); ++i)
+    {
+        const auto &mapping = fileMappings[i];
+
+        std::string filePath = outPath;
+
+        if (fileMappings.size() > 1)
+        {
+            size_t dot = filePath.find_last_of('.');
+            if (dot != std::string::npos)
+                filePath.insert(dot, "_" + std::to_string(i));
+            else
+                filePath += "_" + std::to_string(i);
+        }
+
+        if (dumpMemRange(mapping.front().startAddress, mapping.back().endAddress, filePath))
+        {
+            dumpedAtLeastOne = true;
+        }
+    }
+
+    return dumpedAtLeastOne;
 }
+
 
 bool KittyMemoryMgr::dumpMemELF(const ElfScanner &elf, const std::string &destination) const
 {

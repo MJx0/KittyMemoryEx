@@ -13,9 +13,11 @@
 #include <errno.h>
 #include <inttypes.h>
 
+#include <cerrno>
 #include <cstring>
 #include <cstdint>
 #include <cstdarg>
+#include <cctype>
 
 #include <string>
 #include <sstream>
@@ -28,7 +30,7 @@
 #include <random>
 #include <functional>
 #include <mutex>
-#include <cctype>
+#include <type_traits>
 
 #ifdef __ANDROID__
 #include <sys/system_properties.h>
@@ -39,21 +41,52 @@
  */
 inline size_t KTGetPageSize()
 {
-    static size_t pageSize = 0;
-    if (pageSize == 0)
-        pageSize = (sysconf(_SC_PAGE_SIZE));
+    static long pageSize = 0;
 
-    return pageSize;
+    if (pageSize <= 0)
+        pageSize = sysconf(_SC_PAGESIZE);
+
+    return pageSize > 0 ? static_cast<size_t>(pageSize) : 4096;
 }
 
 #define KT_PAGE_SIZE (KTGetPageSize())
 #define KT_PAGE_START(x) (uintptr_t(x) & ~(KT_PAGE_SIZE - 1))
 #define KT_PAGE_END(x) (KT_PAGE_START(uintptr_t(x) + KT_PAGE_SIZE - 1))
 #define KT_PAGE_OFFSET(x) (uintptr_t(x) - KT_PAGE_START(x))
-#define KT_PAGE_LEN(x) (size_t(KT_PAGE_SIZE - KT_PAGE_OFFSET(x)))
+#define KT_PAGE_REMAIN(x) (size_t(KT_PAGE_SIZE - KT_PAGE_OFFSET(x)))
 
 #define KT_ALIGN_UP(ptr, align) (((uintptr_t)(ptr) + (align) - 1) & ~((align) - 1))
 #define KT_ALIGN_DOWN(ptr, align) (((uintptr_t)(ptr)) & ~((uintptr_t)(align) - 1))
+
+#define KT_IS_ALIGNED_OF(ptr, align) ((((uintptr_t)(ptr)) & ((uintptr_t)(align) - 1)) == 0)
+
+#define KT_IO_CHUNK_SIZE ((size_t)(1024 * 1024))
+
+#if defined(__APPLE__) || defined(__FreeBSD__) || defined(__OpenBSD__) || defined(__NetBSD__)
+typedef off_t kt_off64_t;
+typedef struct stat kt_stat64_t;
+#define kt_lseek64 ::lseek
+#define kt_pread64 ::pread
+#define kt_pwrite64 ::pwrite
+#define kt_stat64 ::stat
+#else
+typedef off64_t kt_off64_t;
+typedef struct stat64 kt_stat64_t;
+#define kt_lseek64 ::lseek64
+#define kt_pread64 ::pread64
+#define kt_pwrite64 ::pwrite64
+#define kt_stat64 ::stat64
+#endif
+
+#define KT_EINTR_RETRY(exp)                                                                                            \
+    ({                                                                                                                 \
+        __typeof__(exp) _rc;                                                                                           \
+        do                                                                                                             \
+        {                                                                                                              \
+            _rc = (exp);                                                                                               \
+        } while (_rc == -1 && errno == EINTR);                                                                         \
+        _rc;                                                                                                           \
+    })
 
 #if defined(__ANDROID__) && defined(kUSE_LOGCAT)
 
@@ -90,16 +123,6 @@ inline size_t KTGetPageSize()
 
 #endif
 
-#define KT_EINTR_RETRY(exp)                                                                                            \
-    ({                                                                                                                 \
-        __typeof__(exp) _rc;                                                                                           \
-        do                                                                                                             \
-        {                                                                                                              \
-            _rc = (exp);                                                                                               \
-        } while (_rc == -1 && errno == EINTR);                                                                         \
-        _rc;                                                                                                           \
-    })
-
 #include <elf.h>
 #ifdef __LP64__
 #define KT_ELFCLASS_BITS 64
@@ -122,6 +145,70 @@ inline size_t KTGetPageSize()
  */
 namespace KittyUtils
 {
+
+    /**
+     * @brief RAII for file descriptor
+     */
+    class KTScopedFD
+    {
+    public:
+        explicit KTScopedFD(int fd) : _fd(fd)
+        {
+        }
+
+        ~KTScopedFD()
+        {
+            if (_fd >= 0)
+                KT_EINTR_RETRY(close(_fd));
+        }
+
+        int get() const
+        {
+            return _fd;
+        }
+
+        KTScopedFD(const KTScopedFD &) = delete;
+        KTScopedFD &operator=(const KTScopedFD &) = delete;
+
+    private:
+        int _fd;
+    };
+
+    /**
+     * @brief RAII for file descriptor
+     */
+    class KTScopedMMap
+    {
+    public:
+        KTScopedMMap(void *ptr, size_t size) : _ptr(ptr), _size(size)
+        {
+        }
+
+        ~KTScopedMMap()
+        {
+            if (_ptr && _ptr != MAP_FAILED)
+                munmap(_ptr, _size);
+        }
+
+        uint8_t *data() const
+        {
+            return static_cast<uint8_t *>(_ptr);
+        }
+
+        size_t size() const
+        {
+            return _size;
+        }
+
+        bool valid() const
+        {
+            return _ptr && _ptr != MAP_FAILED;
+        }
+
+    private:
+        void *_ptr;
+        size_t _size;
+    };
 
 #ifdef __ANDROID__
     /**
@@ -353,29 +440,47 @@ namespace KittyUtils
 #endif
 
     /**
-     * @brief Untags a heap pointer by removing the top byte (TBI).
-     * @note Currently only implemented for android 11+ arm64
+     * @brief Removes AArch64 top-byte pointer tags from an address.
      *
-     * @param p The heap pointer to be untagged.
-     * @return The untagged pointer.
+     * On Android ARM64 systems, pointers may contain TBI/MTE tag bits in
+     * the top byte. This function removes those bits and returns the
+     * canonical virtual address suitable for comparisons against
+     * /proc/self/maps ranges.
+     *
+     * @param ptr Address value to untag.
+     * @return Canonical untagged address.
      */
-    inline uintptr_t untagHeepPtr(uintptr_t p)
+    inline uintptr_t untagPointer(uintptr_t ptr)
     {
 #if defined(__LP64__) && defined(__ANDROID__)
-        return (p & ((static_cast<uintptr_t>(1) << 56) - 1));
+        return ptr & ((static_cast<uintptr_t>(1) << 56) - 1);
 #else
-        return p;
+        return ptr;
 #endif
     }
 
-    inline void *untagHeepPtr(void *p)
+    /**
+     * @overload untagPointer(uintptr_t)
+     *
+     * @param ptr Pointer value to untag.
+     * @return Pointer of the same type with the top-byte tag removed.
+     */
+    template <typename T>
+    inline T *untagPointer(T *ptr)
     {
-        return reinterpret_cast<void *>(untagHeepPtr(uintptr_t(p)));
+        return reinterpret_cast<T *>(untagPointer(reinterpret_cast<uintptr_t>(ptr)));
     }
 
-    inline const void *untagHeepPtr(const void *p)
+    /**
+     * @overload untagPointer(uintptr_t)
+     *
+     * @param ptr Const pointer value to untag.
+     * @return Const pointer of the same type with the top-byte tag removed.
+     */
+    template <typename T>
+    inline const T *untagPointer(const T *ptr)
     {
-        return reinterpret_cast<const void *>(untagHeepPtr(uintptr_t(p)));
+        return reinterpret_cast<const T *>(untagPointer(reinterpret_cast<uintptr_t>(ptr)));
     }
 
     /**
@@ -496,6 +601,13 @@ namespace KittyUtils
          * @param str The string to be trimmed.
          */
         void trim(std::string &str);
+
+        /**
+         * @brief Removes all whitespace characters from a string, not just leading/trailing.
+         *
+         * @param str The string to strip whitespace from.
+         */
+        void removeAllWhitespace(std::string &str);
 
         /**
          * @brief Checks if the provided string is a valid hexadecimal representation.
@@ -674,6 +786,17 @@ namespace KittyUtils
     namespace Zip
     {
         /**
+         * @brief Structure to hold ZIP Central Directory info.
+         */
+        struct CentralDirectoryInfo
+        {
+            uint64_t offset = 0;
+            uint64_t size = 0;
+            uint64_t entries = 0;
+            bool zip64 = false;
+        };
+
+        /**
          * @brief Structure to hold ZIP entry info.
          */
         struct ZipEntryInfo
@@ -704,12 +827,11 @@ namespace KittyUtils
          *
          * @param data Pointer to the ZIP file data.
          * @param fileSize Size of the ZIP file in bytes.
-         * @param cdOffset Pointer to store the offset of the central directory.
-         * @param totalEntries Pointer to store the total number of entries in the ZIP file.
+         * @param info Pointer to store the central directory info.
          *
          * @return True if the central directory is found, false otherwise.
          */
-        bool findCentralDirectory(const uint8_t *data, uint64_t fileSize, uint64_t *cdOffset, uint64_t *totalEntries);
+        bool findCentralDirectory(const uint8_t *data, uint64_t fileSize, CentralDirectoryInfo *info);
 
         /**
          * @brief Lists all entries in a ZIP file.

@@ -177,8 +177,6 @@ MemoryPatch MemoryPatchMgr::createWithAsm(uintptr_t absolute_address,
         ks_free(insn_bytes);
     }
 
-    ks_close(ks);
-
     if (rt)
     {
         KITTY_LOGE("ks_asm failed (asm: %s, count = %zu, error = '%s') (code = %u).",
@@ -187,6 +185,8 @@ MemoryPatch MemoryPatchMgr::createWithAsm(uintptr_t absolute_address,
                    ks_strerror(ks_errno(ks)),
                    ks_errno(ks));
     }
+
+    ks_close(ks);
 
     return patch;
 }

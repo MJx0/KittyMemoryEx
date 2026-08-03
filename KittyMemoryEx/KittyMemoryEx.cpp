@@ -159,7 +159,7 @@ namespace KittyMemoryEx
                 value.pop_back();
 
             if (out)
-                out->data.emplace(std::move(key), std::string(p));
+                out->data.emplace(std::move(key), std::move(value));
         }
 
         return true;
@@ -192,7 +192,7 @@ namespace KittyMemoryEx
             // parse a line in maps file
             // (format) startAddress-endAddress perms offset dev inode pathname
             sscanf(line,
-                   "%" SCNxPTR "-%" SCNxPTR " %4s %" SCNxPTR " %s %lu %s",
+                   "%" SCNxPTR "-%" SCNxPTR " %4s %" SCNxPTR " %s %" SCNu64 " %s",
                    &map.startAddress,
                    &map.endAddress,
                    perms,
@@ -348,7 +348,7 @@ namespace KittyMemoryEx
         if (!address)
             return {};
 
-        address = KittyUtils::untagHeepPtr(address);
+        address = KittyUtils::untagPointer(address);
 
         if (!maps.empty())
         {
@@ -375,6 +375,48 @@ namespace KittyMemoryEx
         }
 
         return {};
+    }
+
+    std::vector<std::vector<ProcMap>> getFileMappings(pid_t pid,
+                                                      const std::string &path,
+                                                      const std::vector<ProcMap> &maps)
+    {
+        auto matched_maps = getMaps(pid, EProcMapFilter::EndWith, path, maps);
+        if (matched_maps.empty())
+            return {};
+
+        std::sort(matched_maps.begin(), matched_maps.end(), [](const auto &a, const auto &b) {
+            return a.startAddress < b.startAddress;
+        });
+
+        std::vector<std::vector<ProcMap>> mappings;
+        mappings.emplace_back();
+        mappings.back().push_back(matched_maps.front());
+
+        uint64_t expectedNextOffset = matched_maps.front().offset + matched_maps.front().length;
+
+        for (size_t i = 1; i < matched_maps.size(); ++i)
+        {
+            const auto &prev = mappings.back().back();
+            const auto &r = matched_maps[i];
+
+            const bool contiguousVA = (r.startAddress == prev.endAddress);
+            const bool contiguousFile = (r.offset == expectedNextOffset);
+
+            if (contiguousVA && contiguousFile)
+            {
+                mappings.back().push_back(r);
+                expectedNextOffset += r.length;
+            }
+            else
+            {
+                mappings.emplace_back();
+                mappings.back().push_back(r);
+                expectedNextOffset = r.offset + r.length;
+            }
+        }
+
+        return mappings;
     }
 
 #ifdef __ANDROID__

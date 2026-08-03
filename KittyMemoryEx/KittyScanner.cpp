@@ -14,243 +14,348 @@ bool compare(const uint8_t *data, const uint8_t *pattern, const char *mask)
     return !*mask;
 }
 
-uintptr_t findInRange(const uintptr_t start, const uintptr_t end, const uint8_t *pattern, const char *mask)
+uintptr_t findInRange(uintptr_t start, uintptr_t end, const uint8_t *pattern, const std::string &mask)
 {
-    const size_t mask_len = strlen(mask);
-    if (mask_len == 0 || start >= end || (end - start) < mask_len)
+    if (mask.empty() || start >= end || (end - start) < mask.length())
         return 0;
 
+    const size_t mask_len = mask.length();
     const uint8_t *scan_start = reinterpret_cast<const uint8_t *>(start);
     const uint8_t *scan_end = reinterpret_cast<const uint8_t *>(end - mask_len);
 
-    // Anchor memchr on the first required byte in the mask.
-    // This preserves wildcard-leading IDA pattern semantics.
+    // Anchor memchr on the first required ('x') byte in the mask.
     size_t anchor_index = 0;
     while (anchor_index < mask_len && mask[anchor_index] != 'x')
         ++anchor_index;
 
-    // All-wildcard mask matches at range start.
+    // All-wildcard mask matches immediately at the start of the range.
     if (anchor_index == mask_len)
         return start;
 
+    const char *mask_data = mask.data();
     const uint8_t anchor_byte = pattern[anchor_index];
     const uint8_t *anchor_scan_start = scan_start + anchor_index;
     const uint8_t *anchor_scan_end = scan_end + anchor_index;
 
-    for (const uint8_t *cur = anchor_scan_start; cur <= anchor_scan_end; ++cur)
+    const uint8_t *cur = anchor_scan_start;
+    while (cur <= anchor_scan_end)
     {
         cur = static_cast<const uint8_t *>(memchr(cur, anchor_byte, (anchor_scan_end - cur) + 1));
         if (!cur)
             break;
 
         const uint8_t *candidate = cur - anchor_index;
-        if (compare(candidate, pattern, mask))
+        if (compare(candidate, pattern, mask_data))
             return reinterpret_cast<uintptr_t>(candidate);
+
+        cur++;
     }
+
     return 0;
 }
 
-std::vector<uintptr_t> KittyScannerMgr::findBytesAll(const uintptr_t start,
-                                                     const uintptr_t end,
+std::vector<uintptr_t> KittyScannerMgr::findBytesAll(uintptr_t start,
+                                                     uintptr_t end,
                                                      const char *bytes,
                                                      const std::string &mask) const
 {
-    std::vector<uintptr_t> local_list;
+    std::vector<uintptr_t> results;
 
-    if (!_pMem || start >= end || !bytes || mask.empty())
-        return local_list;
+    if (!_pMem || start >= end || !bytes || mask.empty() || (end - start) < mask.length())
+        return results;
 
-    std::vector<char> buf(end - start, 0);
-    if (!_pMem->Read(start, &buf[0], buf.size()))
+    const size_t kPageSize = KTGetPageSize();
+    const size_t pattern_len = mask.length();
+    const size_t total_size = end - start;
+
+    results.reserve(128);
+
+    std::vector<char> buf(std::min(total_size, KT_SCANNER_CHUNK_SIZE), 0);
+    uintptr_t current_remote = start;
+
+    while (current_remote < end)
     {
-        KITTY_LOGE("findBytesAll: Failed to read into buffer.");
-        return local_list;
-    }
-
-    uintptr_t curr_search_address = (uintptr_t)&buf[0];
-    uintptr_t search_end = (uintptr_t(&buf[0]) + buf.size());
-    do
-    {
-        uintptr_t found = findInRange(curr_search_address,
-                                      search_end,
-                                      reinterpret_cast<const uint8_t *>(bytes),
-                                      mask.data());
-        if (!found)
+        const size_t bytes_left = end - current_remote;
+        if (bytes_left < pattern_len)
             break;
 
-        local_list.push_back(found);
-        curr_search_address = found + 1;
-    } while (true);
+        const size_t bytes_to_read = std::min(buf.size(), bytes_left);
+        const size_t bytes_read = _pMem->Read(current_remote, buf.data(), bytes_to_read, MemMode::SkipInaccessiblePages);
 
-    if (local_list.empty())
-        return local_list;
+        // Handle failed reads or partial page reads on unmapped/protected memory
+        if (bytes_read < pattern_len)
+        {
+            const size_t page_offset = current_remote % kPageSize;
+            const size_t bytes_to_next_page = kPageSize - page_offset;
 
-    std::vector<uintptr_t> remote_list;
-    for (auto &it : local_list)
-    {
-        remote_list.push_back((it - (uintptr_t(&buf[0]))) + start);
+            // Skip to the next page boundary or past read bytes (whichever advances further)
+            current_remote += std::max(bytes_read, bytes_to_next_page);
+            continue;
+        }
+
+        const uintptr_t local_base = reinterpret_cast<uintptr_t>(buf.data());
+        const uintptr_t local_end = local_base + bytes_read;
+        uintptr_t current_local = local_base;
+
+        while (current_local < local_end)
+        {
+            uintptr_t found_local = findInRange(current_local,
+                                                local_end,
+                                                reinterpret_cast<const uint8_t *>(bytes),
+                                                mask);
+            if (!found_local)
+                break;
+
+            const size_t offset = found_local - local_base;
+            results.push_back(current_remote + offset);
+
+            current_local = found_local + 1;
+        }
+
+        // Slide the window forward based on actual bytes read to handle chunk boundaries
+        current_remote += (bytes_read - pattern_len + 1);
     }
 
-    return remote_list;
+    return results;
 }
 
-uintptr_t KittyScannerMgr::findBytesFirst(const uintptr_t start,
-                                          const uintptr_t end,
+uintptr_t KittyScannerMgr::findBytesFirst(uintptr_t start,
+                                          uintptr_t end,
                                           const char *bytes,
                                           const std::string &mask) const
 {
-    if (!_pMem || start >= end || !bytes || mask.empty())
+    if (!_pMem || start >= end || !bytes || mask.empty() || (end - start) < mask.length())
         return 0;
 
-    std::vector<char> buf(end - start, 0);
-    if (!_pMem->Read(start, &buf[0], buf.size()))
+    const size_t kPageSize = KTGetPageSize();
+    const size_t pattern_len = mask.length();
+    const size_t total_size = end - start;
+
+    std::vector<char> buf(std::min(total_size, KT_SCANNER_CHUNK_SIZE), 0);
+    uintptr_t current_remote = start;
+
+    while (current_remote < end)
     {
-        KITTY_LOGE("findBytesFirst: Failed to read into buffer.");
-        return 0;
+        const size_t bytes_left = end - current_remote;
+        if (bytes_left < pattern_len)
+            break;
+
+        const size_t bytes_to_read = std::min(buf.size(), bytes_left);
+        const size_t bytes_read = _pMem->Read(current_remote, buf.data(), bytes_to_read, MemMode::SkipInaccessiblePages);
+
+        // Handle failed reads or partial page reads on unmapped/protected memory
+        if (bytes_read < pattern_len)
+        {
+            const size_t page_offset = current_remote % kPageSize;
+            const size_t bytes_to_next_page = kPageSize - page_offset;
+
+            // Skip to the next page boundary or past read bytes (whichever advances further)
+            current_remote += std::max(bytes_read, bytes_to_next_page);
+            continue;
+        }
+
+        const uintptr_t local_base = reinterpret_cast<uintptr_t>(buf.data());
+        const uintptr_t local_end = local_base + bytes_read;
+
+        uintptr_t found_local = findInRange(local_base, local_end, reinterpret_cast<const uint8_t *>(bytes), mask);
+        if (found_local)
+        {
+            const size_t offset = found_local - local_base;
+            return current_remote + offset;
+        }
+
+        // Slide the window forward based on actual bytes read to handle chunk boundaries
+        current_remote += (bytes_read - pattern_len + 1);
     }
 
-    uintptr_t local = findInRange((uintptr_t)&buf[0],
-                                  (uintptr_t(&buf[0]) + buf.size()),
-                                  reinterpret_cast<const uint8_t *>(bytes),
-                                  mask.data());
-    return local ? ((local - (uintptr_t(&buf[0]))) + start) : 0;
+    return 0;
 }
 
-std::vector<uintptr_t> KittyScannerMgr::findHexAll(const uintptr_t start,
-                                                   const uintptr_t end,
+std::vector<uintptr_t> KittyScannerMgr::findHexAll(uintptr_t start,
+                                                   uintptr_t end,
                                                    std::string hex,
                                                    const std::string &mask) const
 {
-    std::vector<uintptr_t> list;
+    std::vector<uintptr_t> results;
 
-    if (!_pMem || start >= end || mask.empty() || !KittyUtils::String::validateHex(hex))
-        return list;
+    if (!_pMem || start >= end || mask.empty() || (end - start) < mask.length() ||
+        !KittyUtils::String::validateHex(hex))
+        return results;
 
     const size_t scan_size = mask.length();
     if ((hex.length() / 2) != scan_size)
-        return list;
+        return results;
 
-    std::vector<char> pattern(scan_size);
+    std::vector<char> pattern(scan_size, 0);
     KittyUtils::Data::fromHex(hex, &pattern[0]);
 
-    list = findBytesAll(start, end, pattern.data(), mask);
-    return list;
+    results = findBytesAll(start, end, pattern.data(), mask);
+    return results;
 }
 
-uintptr_t KittyScannerMgr::findHexFirst(const uintptr_t start,
-                                        const uintptr_t end,
-                                        std::string hex,
-                                        const std::string &mask) const
+uintptr_t KittyScannerMgr::findHexFirst(uintptr_t start, uintptr_t end, std::string hex, const std::string &mask) const
 {
-    if (!_pMem || start >= end || mask.empty() || !KittyUtils::String::validateHex(hex))
+    if (!_pMem || start >= end || mask.empty() || (end - start) < mask.length() ||
+        !KittyUtils::String::validateHex(hex))
         return 0;
 
     const size_t scan_size = mask.length();
     if ((hex.length() / 2) != scan_size)
         return 0;
 
-    std::vector<char> pattern(scan_size);
+    std::vector<char> pattern(scan_size, 0);
     KittyUtils::Data::fromHex(hex, &pattern[0]);
 
     return findBytesFirst(start, end, pattern.data(), mask);
 }
 
-std::vector<uintptr_t> KittyScannerMgr::findIdaPatternAll(const uintptr_t start,
-                                                          const uintptr_t end,
-                                                          const std::string &pattern)
+std::vector<uintptr_t> KittyScannerMgr::findIdaPatternAll(uintptr_t start,
+                                                          uintptr_t end,
+                                                          const std::string &pattern) const
 {
-    std::vector<uintptr_t> list;
+    std::vector<uintptr_t> results;
 
-    if (!_pMem || start >= end)
-        return list;
+    if (!_pMem || start >= end || pattern.empty())
+        return results;
 
-    std::string mask;
     std::vector<char> bytes;
+    std::string mask;
 
-    const size_t pattren_len = pattern.length();
-    for (std::size_t i = 0; i < pattren_len; i++)
+    bytes.reserve(pattern.size() / 2);
+    mask.reserve(pattern.size() / 2);
+
+    auto hexValue = [](char c) -> uint8_t {
+        if (c >= '0' && c <= '9')
+            return c - '0';
+
+        if (c >= 'a' && c <= 'f')
+            return c - 'a' + 10;
+
+        if (c >= 'A' && c <= 'F')
+            return c - 'A' + 10;
+
+        return 0;
+    };
+
+    const size_t len = pattern.size();
+
+    for (size_t i = 0; i < len;)
     {
         if (pattern[i] == ' ')
+        {
+            i++;
             continue;
+        }
 
         if (pattern[i] == '?')
         {
             bytes.push_back(0);
-            mask += '?';
+            mask.push_back('?');
+            i += (i + 1 < len && pattern[i + 1] == '?') ? 2 : 1;
+            continue;
         }
-        else if (pattren_len > i + 1 && std::isxdigit(pattern[i]) && std::isxdigit(pattern[i + 1]))
+
+        if (i + 1 < len && std::isxdigit(static_cast<unsigned char>(pattern[i])) &&
+            std::isxdigit(static_cast<unsigned char>(pattern[i + 1])))
         {
-            bytes.push_back(std::stoi(pattern.substr(i++, 2), nullptr, 16));
-            mask += 'x';
+            bytes.push_back(static_cast<char>((hexValue(pattern[i]) << 4) | hexValue(pattern[i + 1])));
+            mask.push_back('x');
+            i += 2;
+            continue;
         }
+
+        // invalid character
+        i++;
     }
 
-    if (bytes.empty() || mask.empty() || bytes.size() != mask.size())
-        return list;
+    if (bytes.empty() || bytes.size() != mask.size())
+        return results;
 
-    list = findBytesAll(start, end, bytes.data(), mask);
-    return list;
+    return findBytesAll(start, end, bytes.data(), mask);
 }
 
-uintptr_t KittyScannerMgr::findIdaPatternFirst(const uintptr_t start, const uintptr_t end, const std::string &pattern)
+
+uintptr_t KittyScannerMgr::findIdaPatternFirst(uintptr_t start, uintptr_t end, const std::string &pattern) const
 {
-    if (!_pMem || start >= end)
+    if (!_pMem || start >= end || pattern.empty())
         return 0;
 
-    std::string mask;
     std::vector<char> bytes;
+    std::string mask;
 
-    const size_t pattren_len = pattern.length();
-    for (std::size_t i = 0; i < pattren_len; i++)
+    bytes.reserve(pattern.size() / 2);
+    mask.reserve(pattern.size() / 2);
+
+    auto hexValue = [](char c) -> uint8_t {
+        if (c >= '0' && c <= '9')
+            return c - '0';
+
+        if (c >= 'a' && c <= 'f')
+            return c - 'a' + 10;
+
+        if (c >= 'A' && c <= 'F')
+            return c - 'A' + 10;
+
+        return 0;
+    };
+
+    const size_t len = pattern.size();
+
+    for (size_t i = 0; i < len;)
     {
         if (pattern[i] == ' ')
+        {
+            i++;
             continue;
+        }
 
         if (pattern[i] == '?')
         {
             bytes.push_back(0);
-            mask += '?';
+            mask.push_back('?');
+            i += (i + 1 < len && pattern[i + 1] == '?') ? 2 : 1;
+            continue;
         }
-        else if (pattren_len > i + 1 && std::isxdigit(pattern[i]) && std::isxdigit(pattern[i + 1]))
+
+        if (i + 1 < len && std::isxdigit(static_cast<unsigned char>(pattern[i])) &&
+            std::isxdigit(static_cast<unsigned char>(pattern[i + 1])))
         {
-            bytes.push_back(std::stoi(pattern.substr(i++, 2), nullptr, 16));
-            mask += 'x';
+            bytes.push_back(static_cast<char>((hexValue(pattern[i]) << 4) | hexValue(pattern[i + 1])));
+            mask.push_back('x');
+            i += 2;
+            continue;
         }
+
+        i++;
     }
 
-    if (bytes.empty() || mask.empty() || bytes.size() != mask.size())
+    if (bytes.empty() || bytes.size() != mask.size())
         return 0;
 
     return findBytesFirst(start, end, bytes.data(), mask);
 }
 
-std::vector<uintptr_t> KittyScannerMgr::findDataAll(const uintptr_t start,
-                                                    const uintptr_t end,
-                                                    const void *data,
-                                                    size_t size) const
+std::vector<uintptr_t> KittyScannerMgr::findDataAll(uintptr_t start, uintptr_t end, const void *data, size_t size) const
 {
-    std::vector<uintptr_t> list;
+    std::vector<uintptr_t> results;
 
     if (!_pMem || start >= end || !data || size < 1)
-        return list;
+        return results;
 
     std::string mask(size, 'x');
 
-    list = findBytesAll(start, end, (const char *)data, mask);
-    return list;
+    results = findBytesAll(start, end, reinterpret_cast<const char *>(data), mask);
+    return results;
 }
 
-uintptr_t KittyScannerMgr::findDataFirst(const uintptr_t start,
-                                         const uintptr_t end,
-                                         const void *data,
-                                         size_t size) const
+uintptr_t KittyScannerMgr::findDataFirst(uintptr_t start, uintptr_t end, const void *data, size_t size) const
 {
     if (!_pMem || start >= end || !data || size < 1)
         return 0;
 
     std::string mask(size, 'x');
 
-    return findBytesFirst(start, end, (const char *)data, mask);
+    return findBytesFirst(start, end, reinterpret_cast<const char *>(data), mask);
 }
 
 /* ======================= ElfScanner ======================= */
@@ -946,9 +1051,25 @@ std::unordered_map<std::string, uintptr_t> ElfScanner::dsymbols()
             return _dsymbolsMap;
         }
 
+        if (ehdr->e_shstrndx >= ehdr->e_shnum)
+        {
+            KITTY_LOGD("Invalid section header string table index in <%s>", filePath().c_str());
+            cleanup();
+            return _dsymbolsMap;
+        }
+
         const KT_ElfW(Shdr) *shdr = reinterpret_cast<KT_ElfW(Shdr) *>(reinterpret_cast<char *>(mmap_info.data) +
                                                                       ehdr->e_shoff);
         const KT_ElfW(Shdr) *shstrtab_shdr = shdr + ehdr->e_shstrndx;
+
+        if (shstrtab_shdr->sh_offset > mmap_info.size ||
+            mmap_info.size - shstrtab_shdr->sh_offset < shstrtab_shdr->sh_size)
+        {
+            KITTY_LOGD("Invalid section header string table in <%s>", filePath().c_str());
+            cleanup();
+            return _dsymbolsMap;
+        }
+
         const char *sectionstr = reinterpret_cast<char *>(reinterpret_cast<char *>(mmap_info.data) +
                                                           shstrtab_shdr->sh_offset);
         for (uint16_t i = 0; i < ehdr->e_shnum; ++i)
@@ -956,11 +1077,15 @@ std::unordered_map<std::string, uintptr_t> ElfScanner::dsymbols()
             if (shdr[i].sh_type != SHT_SYMTAB)
                 continue;
 
+            if (shdr[i].sh_name >= shstrtab_shdr->sh_size)
+                continue;
+
             std::string section_name = std::string(reinterpret_cast<const char *>(sectionstr + shdr[i].sh_name));
             if (section_name.compare(".symtab") != 0)
                 continue;
 
-            if ((shdr[i].sh_offset + shdr[i].sh_size) > mmap_info.size || shdr[i].sh_link >= ehdr->e_shnum ||
+            if (shdr[i].sh_entsize == 0 || (shdr[i].sh_offset + shdr[i].sh_size) > mmap_info.size ||
+                shdr[i].sh_link >= ehdr->e_shnum ||
                 (shdr[shdr[i].sh_link].sh_offset + shdr[shdr[i].sh_link].sh_size) > mmap_info.size)
                 continue;
 
@@ -1345,7 +1470,7 @@ uintptr_t ElfScannerMgr::findRemoteSymbol(const std::string &local_sym_name, uin
 LinkerScannerMgr::LinkerScannerMgr(IKittyMemOp *pMem, uintptr_t linkerBase) : ElfScanner(pMem, linkerBase)
 {
     memset(&_linker_syms, 0, sizeof(_linker_syms));
-    memset(&_soinfo_offsets, 0, sizeof(_soinfo_offsets));
+
     _init = false;
 
     if (!pMem || !isValid())
@@ -1358,7 +1483,7 @@ LinkerScannerMgr::LinkerScannerMgr(IKittyMemOp *pMem, uintptr_t linkerBase) : El
 LinkerScannerMgr::LinkerScannerMgr(IKittyMemOp *pMem, const ElfScanner &linkerElf) : ElfScanner(linkerElf)
 {
     memset(&_linker_syms, 0, sizeof(_linker_syms));
-    memset(&_soinfo_offsets, 0, sizeof(_soinfo_offsets));
+
     _init = false;
 
     if (!pMem || !isValid())
@@ -1432,26 +1557,28 @@ bool LinkerScannerMgr::init()
         }
     }
 
+    static constexpr uintptr_t kNoOff = kitty_soinfo_offsets_t::noff;
+
     KITTY_LOGD("soinfo_base(%zx)", _soinfo_offsets.base);
 
-    if (_soinfo_offsets.base == 0)
+    if (_soinfo_offsets.base == kNoOff)
         return false;
 
     for (size_t i = 0; i < si_buf.size(); i += sizeof(uintptr_t))
     {
         uintptr_t value = *(uintptr_t *)&si_buf[i];
 
-        if (!_soinfo_offsets.phdr && value == si_elf.phdr())
+        if (_soinfo_offsets.phdr == kNoOff && value == si_elf.phdr())
         {
             _soinfo_offsets.phdr = i;
             continue;
         }
-        if (!_soinfo_offsets.phnum && value == si_elf.header().e_phnum)
+        if (_soinfo_offsets.phnum == kNoOff && value == si_elf.header().e_phnum)
         {
             _soinfo_offsets.phnum = i;
             continue;
         }
-        if (!_soinfo_offsets.size &&
+        if (_soinfo_offsets.size == kNoOff &&
             (value == si_elf.loadSize() ||
              value ==
                  (si_elf.loadSize() + KittyMemoryEx::getAddressMap(_pMem->processID(), si_elf.end(), allMaps).length)))
@@ -1459,27 +1586,27 @@ bool LinkerScannerMgr::init()
             _soinfo_offsets.size = i;
             continue;
         }
-        if (!_soinfo_offsets.dyn && value == si_elf.dynamic())
+        if (_soinfo_offsets.dyn == kNoOff && value == si_elf.dynamic())
         {
             _soinfo_offsets.dyn = i;
             continue;
         }
-        if (!_soinfo_offsets.strtab && value == si_elf.stringTable())
+        if (_soinfo_offsets.strtab == kNoOff && value == si_elf.stringTable())
         {
             _soinfo_offsets.strtab = i;
             continue;
         }
-        if (!_soinfo_offsets.symtab && value == si_elf.symbolTable())
+        if (_soinfo_offsets.symtab == kNoOff && value == si_elf.symbolTable())
         {
             _soinfo_offsets.symtab = i;
             continue;
         }
-        if (!_soinfo_offsets.bias && value == si_elf.loadBias() && i != _soinfo_offsets.base)
+        if (_soinfo_offsets.bias == kNoOff && value == si_elf.loadBias() && i != _soinfo_offsets.base)
         {
             _soinfo_offsets.bias = i;
             continue;
         }
-        if (!_soinfo_offsets.strsz && value == si_elf.stringTableSize())
+        if (_soinfo_offsets.strsz == kNoOff && value == si_elf.stringTableSize())
         {
             _soinfo_offsets.strsz = i;
             continue;
@@ -1496,8 +1623,8 @@ bool LinkerScannerMgr::init()
                _soinfo_offsets.strsz,
                _soinfo_offsets.symtab);
 
-    if (!(_soinfo_offsets.size && _soinfo_offsets.bias && _soinfo_offsets.dyn && _soinfo_offsets.symtab &&
-          _soinfo_offsets.strtab))
+    if (_soinfo_offsets.size == kNoOff || _soinfo_offsets.bias == kNoOff || _soinfo_offsets.dyn == kNoOff ||
+        _soinfo_offsets.symtab == kNoOff || _soinfo_offsets.strtab == kNoOff)
     {
         return false;
     }
@@ -1537,7 +1664,7 @@ bool LinkerScannerMgr::init()
 
     KITTY_LOGD("soinfo_sonext(%zx)", _soinfo_offsets.next);
 
-    _init = _soinfo_offsets.next != 0;
+    _init = _soinfo_offsets.next != kNoOff;
     return _init;
 }
 
@@ -1598,14 +1725,14 @@ kitty_soinfo_t LinkerScannerMgr::infoFromSoInfo_(uintptr_t si, const std::vector
     info.dyn = *(uintptr_t *)(si_buf.data() + _soinfo_offsets.dyn);
     info.strtab = *(uintptr_t *)(si_buf.data() + _soinfo_offsets.strtab);
     info.symtab = *(uintptr_t *)(si_buf.data() + _soinfo_offsets.symtab);
-    info.strsz = _soinfo_offsets.strsz ? *(uintptr_t *)(si_buf.data() + _soinfo_offsets.strsz) : 0;
+    info.strsz = _soinfo_offsets.strsz != kitty_soinfo_offsets_t::noff
+                     ? *(uintptr_t *)(si_buf.data() + _soinfo_offsets.strsz)
+                     : 0;
     info.bias = *(uintptr_t *)(si_buf.data() + _soinfo_offsets.bias);
     info.next = *(uintptr_t *)(si_buf.data() + _soinfo_offsets.next);
     info.e_machine = header().e_machine;
 
     uintptr_t start_map_addr = info.base;
-    if (start_map_addr == 0)
-        start_map_addr = info.base;
     if (start_map_addr == 0)
         start_map_addr = info.bias;
     if (start_map_addr == 0)
@@ -1654,7 +1781,6 @@ NativeBridgeScannerMgr::NativeBridgeScannerMgr(IKittyMemOp *pMem,
     fnNativeBridgeInitialized = nullptr;
 
     memset(&_nbItf_data, 0, sizeof(_nbItf_data));
-    memset(&_soinfo_offsets, 0, sizeof(_soinfo_offsets));
 
     _init = false;
 
@@ -1671,6 +1797,8 @@ bool NativeBridgeScannerMgr::init()
 
     if (_init)
         return true;
+
+    static constexpr uintptr_t kNoOff = kitty_soinfo_offsets_t::noff;
 
     _nbElf = _elfScanner->findElf("/libnativebridge.so", EScanElfType::Native, EScanElfFilter::System);
     if (!_nbElf.isValid())
@@ -1930,24 +2058,24 @@ bool NativeBridgeScannerMgr::init()
                     }
                 }
 
-                if (sohead.offsets.base == 0)
+                if (sohead.offsets.base == kNoOff)
                     continue;
 
                 for (size_t j = 0; j < si_buf_inner.size(); j += sizeof(uintptr_t))
                 {
                     uintptr_t value = *(uintptr_t *)&si_buf_inner[j];
 
-                    if (!sohead.offsets.phdr && value == si_elf.phdr())
+                    if (sohead.offsets.phdr == kNoOff && value == si_elf.phdr())
                     {
                         sohead.offsets.phdr = j;
                         continue;
                     }
-                    if (!sohead.offsets.phnum && value == si_elf.header().e_phnum)
+                    if (sohead.offsets.phnum == kNoOff && value == si_elf.header().e_phnum)
                     {
                         sohead.offsets.phnum = j;
                         continue;
                     }
-                    if (!sohead.offsets.size &&
+                    if (sohead.offsets.size == kNoOff &&
                         (value == si_elf.loadSize() ||
                          value == (si_elf.loadSize() +
                                    KittyMemoryEx::getAddressMap(_pMem->processID(), si_elf.end(), maps).length)))
@@ -1955,35 +2083,35 @@ bool NativeBridgeScannerMgr::init()
                         sohead.offsets.size = j;
                         continue;
                     }
-                    if (!sohead.offsets.dyn && value == si_elf.dynamic())
+                    if (sohead.offsets.dyn == kNoOff && value == si_elf.dynamic())
                     {
                         sohead.offsets.dyn = j;
                         continue;
                     }
-                    if (!sohead.offsets.strtab && value == si_elf.stringTable())
+                    if (sohead.offsets.strtab == kNoOff && value == si_elf.stringTable())
                     {
                         sohead.offsets.strtab = j;
                         continue;
                     }
-                    if (!sohead.offsets.symtab && value == si_elf.symbolTable())
+                    if (sohead.offsets.symtab == kNoOff && value == si_elf.symbolTable())
                     {
                         sohead.offsets.symtab = j;
                         continue;
                     }
-                    if (!sohead.offsets.bias && value == si_elf.loadBias() && j != sohead.offsets.base)
+                    if (sohead.offsets.bias == kNoOff && value == si_elf.loadBias() && j != sohead.offsets.base)
                     {
                         sohead.offsets.bias = j;
                         continue;
                     }
-                    if (!sohead.offsets.strsz && value == si_elf.stringTableSize())
+                    if (sohead.offsets.strsz == kNoOff && value == si_elf.stringTableSize())
                     {
                         sohead.offsets.strsz = j;
                         continue;
                     }
                 }
 
-                if (sohead.offsets.size && sohead.offsets.bias && sohead.offsets.dyn && sohead.offsets.symtab &&
-                    sohead.offsets.strtab)
+                if (sohead.offsets.size != kNoOff && sohead.offsets.bias != kNoOff && sohead.offsets.dyn != kNoOff &&
+                    sohead.offsets.symtab != kNoOff && sohead.offsets.strtab != kNoOff && sohead.offsets.phdr != kNoOff)
                 {
                     // phdr offset might not be 0
                     sohead.soinfo -= sohead.offsets.phdr;
@@ -2048,7 +2176,7 @@ bool NativeBridgeScannerMgr::init()
 
     KITTY_LOGD("nb_soinfo_next(%zx)", _soinfo_offsets.next);
 
-    _init = _soinfo_offsets.next != 0;
+    _init = _soinfo_offsets.isValid();
     return _init;
 }
 
@@ -2110,14 +2238,14 @@ kitty_soinfo_t NativeBridgeScannerMgr::infoFromSoInfo_(uintptr_t si,
     info.dyn = *(uintptr_t *)(si_buf.data() + _soinfo_offsets.dyn);
     info.strtab = *(uintptr_t *)(si_buf.data() + _soinfo_offsets.strtab);
     info.symtab = *(uintptr_t *)(si_buf.data() + _soinfo_offsets.symtab);
-    info.strsz = _soinfo_offsets.strsz ? *(uintptr_t *)(si_buf.data() + _soinfo_offsets.strsz) : 0;
+    info.strsz = _soinfo_offsets.strsz != kitty_soinfo_offsets_t::noff
+                     ? *(uintptr_t *)(si_buf.data() + _soinfo_offsets.strsz)
+                     : 0;
     info.bias = *(uintptr_t *)(si_buf.data() + _soinfo_offsets.bias);
     info.next = *(uintptr_t *)(si_buf.data() + _soinfo_offsets.next);
     info.e_machine = _soheadElf.header().e_machine;
 
     uintptr_t start_map_addr = info.base;
-    if (start_map_addr == 0)
-        start_map_addr = info.base;
     if (start_map_addr == 0)
         start_map_addr = info.bias;
     if (start_map_addr == 0)

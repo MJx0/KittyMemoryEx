@@ -24,7 +24,7 @@ namespace KittyMemoryEx
         bool is_ro, is_rw, is_rx;
         uintptr_t offset;
         std::string dev;
-        unsigned long inode;
+        uint64_t inode;
         std::string pathname;
 
         ProcMap()
@@ -80,7 +80,7 @@ namespace KittyMemoryEx
          */
         inline std::string toString() const
         {
-            return KittyUtils::String::fmt("%" PRIxPTR "-%" PRIxPTR " %c%c%c%c %" PRIxPTR " %s %lu %s",
+            return KittyUtils::String::fmt("%" PRIxPTR "-%" PRIxPTR " %c%c%c%c %" PRIxPTR " %s %" PRIu64 " %s",
                                            startAddress,
                                            endAddress,
                                            readable ? 'r' : '-',
@@ -279,7 +279,7 @@ namespace KittyMemoryEx
      * @param pid The remote process ID
      * @param filter Filter type to use.
      * @param name Name to filter by.
-     * @param maps The vector of cached process maps (optional).
+     * @param maps Vector of cached process maps (optional).
      * @return Vector of ProcMap objects that match the filter.
      */
     std::vector<ProcMap> getMaps(pid_t pid,
@@ -288,14 +288,32 @@ namespace KittyMemoryEx
                                  const std::vector<ProcMap> &maps = std::vector<ProcMap>());
 
     /**
-     * @brief Retrieves the map information for a specific address in the current process.
+     * @brief Retrieves the map information for a specific address in a remote process.
      *
      * @param pid The remote process ID
      * @param address Address to search for.
-     * @param maps The vector of cached process maps (optional).
+     * @param maps Vector of cached process maps (optional).
      * @return ProcMap object representing the map for the address, or an invalid map if not found.
      */
     ProcMap getAddressMap(pid_t pid, uintptr_t address, const std::vector<ProcMap> &maps = std::vector<ProcMap>());
+
+    /**
+     * @brief Returns all contiguous mappings of a file in a remote process.
+     *
+     * Finds all memory maps backed by the specified file and groups adjacent
+     * maps into contiguous mappings. Two maps are considered contiguous
+     * when both their virtual addresses and file offsets are contiguous.
+     * Multiple independent mappings of the same file are returned as separate
+     * groups.
+     *
+     * @param pid The remote process ID
+     * @param path File path to search for.
+     * @param maps Vector of cached process maps (optional).
+     * @return A vector where each element represents a contiguous file mapping
+     *         as a sequence of its constituent memory maps.
+     */
+    std::vector<std::vector<ProcMap>> getFileMappings(pid_t pid, const std::string &path,
+                                                      const std::vector<ProcMap> &maps = std::vector<ProcMap>());
 
 #ifdef __ANDROID__
     /**

@@ -47,7 +47,7 @@ int main(int argc, char *args[])
     do
     {
         sleep(1);
-        
+
         // findElf can find libs in split apk too
         g_il2cppElf = kittyMemMgr.elfScanner.findElf("libil2cpp.so");
 
@@ -105,6 +105,8 @@ int main(int argc, char *args[])
     // read & write memory (address, buffer, buffer_size)
     char magic[16] = {0};
     size_t bytesRead = kittyMemMgr.readMem(il2cppBase, magic, sizeof(magic));
+    // SkipInaccessiblePages mode
+    // size_t bytesRead = kittyMemMgr.readMem(il2cppBase, magic, sizeof(magic), MemMode::SkipInaccessiblePages);
     KITTY_LOGI("bytesRead: 0x%zx", bytesRead);
     // size_t bytesWritten = kittyMemMgr.writeMem(il2cppBase, magic, sizeof(magic));
     // KITTY_LOGI("bytesWritten: 0x%zx", bytesRead);
@@ -112,6 +114,50 @@ int main(int argc, char *args[])
     // read & write string from memory (magic + 1) = "ELF"
     // kittyMemMgr.readMemStr(il2cppBase + 1, 3);
     // kittyMemMgr.writeMemStr(il2cppBase + 1, magic + 1, 3);
+
+    KITTY_LOGI("============= FIND / DUMP MEMORY MAPPED FILES =============");
+
+    // better to search late into the game to get finalized metadata regions
+    // if there are multiple mappings, in most cases choose the one that's closes to original file size on disk
+    {
+        auto unityMetadataMappings = KittyMemoryEx::getFileMappings(processID, "global-metadata.dat");
+        KITTY_LOGI("unityMetadataMappings: %d", int(unityMetadataMappings.size()));
+        for (size_t i = 0; i < unityMetadataMappings.size(); i++)
+        {
+            uintptr_t start = unityMetadataMappings[i].front().startAddress;
+            uintptr_t end = unityMetadataMappings[i].back().endAddress;
+            KITTY_LOGI("unityMetadataMappings[%d]: %p - %p", int(i), (void *)start, (void *)end);
+        }
+
+        std::string dumpFolder = ".";
+        std::string dumpDir = KittyUtils::String::fmt("%s/%s", dumpFolder.c_str(), "Dump");
+        KittyIOFile::createDirectoryRecursive(dumpDir);
+
+        // dump metadata
+        std::string dumpDatPath = KittyUtils::String::fmt("%s/global-metadata.dat", dumpDir.c_str());
+        if (kittyMemMgr.dumpMemFileMappings("global-metadata.dat", dumpDatPath.c_str()))
+        {
+            KITTY_LOGI("Dumped Unity metadata mappings at %s", dumpDir.c_str());
+        }
+        else
+        {
+            KITTY_LOGI("Failed to dump Unity metadata!");
+        }
+
+        // dump lib.so
+        std::string dumpSoPath = KittyUtils::String::fmt("%s/libil2cpp_%p-%p.so",
+                                                         dumpDir.c_str(),
+                                                         (void *)g_il2cppElf.base(),
+                                                         (void *)g_il2cppElf.end());
+        if (kittyMemMgr.dumpMemELF(g_il2cppElf, dumpSoPath))
+        {
+            KITTY_LOGI("Dumped Unity libil2cpp.so at %s", dumpDir.c_str());
+        }
+        else
+        {
+            KITTY_LOGI("Failed to dump Unity libil2cpp.so!");
+        }
+    }
 
     KITTY_LOGI("==================== MEMORY PATCH ===================");
 
@@ -157,23 +203,6 @@ int main(int argc, char *args[])
         KITTY_LOGI("Current Bytes: %s", get_canShoot.get_CurrBytes().c_str());
     }
 
-
-    KITTY_LOGI("==================== MEMORY DUMP ====================");
-
-    std::string dumpFolder = ".";
-    bool isDumped = false;
-
-    // dump memory elf
-    std::string sodumpPath = dumpFolder + "/il2cpp_dump.so";
-    isDumped = kittyMemMgr.dumpMemELF(g_il2cppElf, sodumpPath);
-    KITTY_LOGI("il2cpp so dump = %d", isDumped ? 1 : 0);
-
-    // dump memory file
-    std::string datdumpPath = dumpFolder + "/global-metadata.dat";
-    isDumped = kittyMemMgr.dumpMemFile("global-metadata.dat", datdumpPath);
-    KITTY_LOGI("metadata dump = %d", isDumped ? 1 : 0);
-
-
     KITTY_LOGI("==================== PATTERN SCAN ===================");
 
     // scan within a memory range for bytes with mask x and ?
@@ -188,19 +217,25 @@ int main(int argc, char *args[])
     KITTY_LOGI("search end %p", (void *)search_end);
 
     // scan with direct bytes & get one result
-    found_at = kittyMemMgr.memScanner.findBytesFirst(search_start, search_end, "\x33\x44\x55\x66\x00\x77\x88\x00\x99",
+    found_at = kittyMemMgr.memScanner.findBytesFirst(search_start,
+                                                     search_end,
+                                                     "\x33\x44\x55\x66\x00\x77\x88\x00\x99",
                                                      "xxxx??x?x");
     KITTY_LOGI("found bytes at: %p", (void *)found_at);
     // scan with direct bytes & get all results
-    found_at_list = kittyMemMgr.memScanner.findBytesAll(search_start, search_end,
-                                                        "\x33\x44\x55\x66\x00\x77\x88\x00\x99", "xxxx??x?x");
+    found_at_list = kittyMemMgr.memScanner.findBytesAll(search_start,
+                                                        search_end,
+                                                        "\x33\x44\x55\x66\x00\x77\x88\x00\x99",
+                                                        "xxxx??x?x");
     KITTY_LOGI("found bytes results: %zu", found_at_list.size());
 
     // scan with hex & get one result
     found_at = kittyMemMgr.memScanner.findHexFirst(search_start, search_end, "33 44 55 66 00 77 88 00 99", "xxxx??x?x");
     KITTY_LOGI("found hex at: %p", (void *)found_at);
     // scan with hex & get all results
-    found_at_list = kittyMemMgr.memScanner.findHexAll(search_start, search_end, "33 44 55 66 00 77 88 00 99",
+    found_at_list = kittyMemMgr.memScanner.findHexAll(search_start,
+                                                      search_end,
+                                                      "33 44 55 66 00 77 88 00 99",
                                                       "xxxx??x?x");
     KITTY_LOGI("found hex results: %zu", found_at_list.size());
 
@@ -264,8 +299,15 @@ int main(int argc, char *args[])
     KITTY_LOGI("libc [ remote_mmap = %p | remote_munmap = %p ]", (void *)remote_mmap, (void *)remote_munmap);
 
     // mmap(nullptr, KT_PAGE_SIZE, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
-    uintptr_t mmap_ret = kittyMemMgr.trace.callFunction(remote_mmap, nullptr, KT_PAGE_SIZE, PROT_READ | PROT_WRITE,
-                                                        MAP_PRIVATE | MAP_ANONYMOUS, -1, 0).result.ptr;
+    uintptr_t mmap_ret = kittyMemMgr.trace
+                             .callFunction(remote_mmap,
+                                           nullptr,
+                                           KT_PAGE_SIZE,
+                                           PROT_READ | PROT_WRITE,
+                                           MAP_PRIVATE | MAP_ANONYMOUS,
+                                           -1,
+                                           0)
+                             .result.ptr;
     // munmap(mmap_ret, KT_PAGE_SIZE);
     uintptr_t munmap_ret = kittyMemMgr.trace.callFunction(remote_munmap, mmap_ret, KT_PAGE_SIZE).result.val;
 
