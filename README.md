@@ -1,6 +1,6 @@
 # KittyMemoryEx
 
-KittyMemoryEx is the external implementation of [KittyMemory](https://github.com/MJx0/KittyMemory): the same memory patching, scanning, ELF introspection toolkit, but for remote processes on **Android** and **Linux**. It adds remote memory I/O, ptrace-based process control, hardware/software breakpoints, remote function/syscall calls. It is the memory backend used by [AndKittyInjector](https://github.com/MJx0/AndKittyInjector).
+KittyMemoryEx is the external implementation of [KittyMemory](https://github.com/MJx0/KittyMemory): the same memory patching, scanning, dumping, ELF introspection toolkit, but for remote processes on **Android** and **Linux**. It adds remote memory I/O, ptrace-based process control, hardware/software breakpoints, remote function/syscall calls. It is the memory backend used by [AndKittyInjector](https://github.com/MJx0/AndKittyInjector).
 
 ## Features
 
