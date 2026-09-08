@@ -194,39 +194,77 @@ static ssize_t call_process_vm_writev(pid_t pid,
 
 std::string IKittyMemOp::ReadUTF8(uintptr_t address, size_t maxLen)
 {
-    std::string result(maxLen + 1, '\0');
-    if (Read(address, result.data(), maxLen) == 0)
-        return "";
+    std::string result(maxLen, '\0');
 
-    const size_t nullPos = result.find('\0');
-    if (nullPos != std::string::npos)
+    const size_t bytesRead = Read(address, result.data(), maxLen);
+    if (bytesRead == 0)
+        return {};
+
+    const size_t validBytes = std::min(bytesRead, maxLen);
+    result.resize(validBytes);
+
+    if (const size_t nullPos = result.find('\0'); nullPos != std::string::npos)
+    {
         result.resize(nullPos);
+    }
 
     return result;
 }
 
 std::u16string IKittyMemOp::ReadUTF16(uintptr_t address, size_t maxLen)
 {
-    std::u16string result(maxLen + 1, u'\0');
-    if (Read(address, result.data(), maxLen * sizeof(char16_t)) == 0)
-        return u"";
+    if (address == 0 || maxLen <= 0)
+        return {};
 
-    const size_t nullPos = result.find(u'\0');
-    if (nullPos != std::u16string::npos)
+    if (maxLen > SIZE_MAX / sizeof(char16_t))
+        return {};
+
+    std::u16string result(maxLen, u'\0');
+
+    const size_t bytesToRead = maxLen * sizeof(char16_t);
+
+    size_t bytesRead = Read(address, result.data(), bytesToRead);
+    if (bytesRead < sizeof(char16_t))
+        return {};
+
+    bytesRead -= bytesRead % sizeof(char16_t);
+    if (bytesRead == 0)
+        return {};
+
+    const size_t codeUnitsRead = bytesRead / sizeof(char16_t);
+    result.resize(codeUnitsRead);
+
+    if (const size_t nullPos = result.find(u'\0'); nullPos != std::u16string::npos)
+    {
         result.resize(nullPos);
+    }
 
     return result;
 }
 
 std::u32string IKittyMemOp::ReadUTF32(uintptr_t address, size_t maxLen)
 {
-    std::u32string result(maxLen + 1, U'\0');
-    if (Read(address, result.data(), maxLen * sizeof(char32_t)) == 0)
-        return U"";
+    std::u32string result(maxLen, U'\0');
 
-    const size_t nullPos = result.find(U'\0');
-    if (nullPos != std::u32string::npos)
+    const size_t bytesToRead = maxLen * sizeof(char32_t);
+
+    size_t bytesRead = Read(address, result.data(), bytesToRead);
+    if (bytesRead < sizeof(char32_t))
+        return {};
+
+    // Don't leave a partial UTF-32 code unit at the end.
+    bytesRead -= bytesRead % sizeof(char32_t);
+    if (bytesRead == 0)
+        return {};
+
+    const size_t codeUnitsRead = bytesRead / sizeof(char32_t);
+    result.resize(codeUnitsRead);
+
+    // Truncate at NUL if one exists.
+    if (const size_t nullPos = result.find(U'\0'); nullPos != std::u32string::npos)
+    {
         result.resize(nullPos);
+    }
 
     return result;
 }

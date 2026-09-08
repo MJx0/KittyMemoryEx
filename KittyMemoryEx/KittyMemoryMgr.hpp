@@ -138,7 +138,7 @@ public:
      *
      * @return UTF-8 string stored in remote memory.
      */
-    std::string readUTF8(uintptr_t address, size_t maxLen)
+    std::string readMemUTF8(uintptr_t address, size_t maxLen)
     {
         if (!isMemValid() || !address || !maxLen)
             return "";
@@ -156,7 +156,7 @@ public:
      *
      * @return UTF-16 string stored in remote memory.
      */
-    std::u16string readUTF16(uintptr_t address, size_t maxLen)
+    std::u16string readMemUTF16(uintptr_t address, size_t maxLen)
     {
         if (!isMemValid() || !address || !maxLen)
             return u"";
@@ -174,7 +174,7 @@ public:
      *
      * @return UTF-32 string stored in remote memory.
      */
-    std::u32string readUTF32(uintptr_t address, size_t maxLen)
+    std::u32string readMemUTF32(uintptr_t address, size_t maxLen)
     {
         if (!isMemValid() || !address || !maxLen)
             return U"";
@@ -192,7 +192,7 @@ public:
      *
      * @return Wide string stored in remote memory.
      */
-    std::wstring readWStr(uintptr_t address, size_t maxLen)
+    std::wstring readMemWStr(uintptr_t address, size_t maxLen)
     {
         if (!isMemValid() || !address || !maxLen)
             return L"";
