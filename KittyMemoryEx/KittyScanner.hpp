@@ -205,7 +205,7 @@ protected:
     uintptr_t _loadBias, _loadSize;
     uintptr_t _dynamic;
     std::vector<KT_ElfW(Dyn)> _dynamics;
-    uintptr_t _stringTable, _symbolTable;
+    uintptr_t _stringTable, _symbolTable, _elfHashTable, _gnuHashTable;
     size_t _strsz, _syment;
     bool _fixedBySoInfo;
     KittyMemoryEx::ProcMap _baseSegment;
@@ -213,15 +213,14 @@ protected:
     std::vector<KittyMemoryEx::ProcMap> _bssSegments;
     std::string _filepath;
     std::string _realpath;
-    bool _symbols_init;
     bool _dsymbols_init;
-    std::unordered_map<std::string, uintptr_t> _symbolsMap;
     std::unordered_map<std::string, uintptr_t> _dsymbolsMap;
 
 public:
     ElfScanner()
         : _pMem(nullptr), _elfBase(0), _phdr(0), _loads(0), _loadBias(0), _loadSize(0), _dynamic(0), _stringTable(0),
-          _symbolTable(0), _strsz(0), _syment(0), _fixedBySoInfo(false), _symbols_init(false), _dsymbols_init(false)
+          _symbolTable(0), _elfHashTable(0), _gnuHashTable(0), _strsz(0), _syment(0), _fixedBySoInfo(false),
+          _dsymbols_init(false)
     {
     }
 
@@ -408,10 +407,20 @@ public:
     }
 
     /**
-     * @brief Returns a map of symbols from the dynamic symbol table (DT_SYMTAB).
-     * @return A map where keys are symbol names and values are their corresponding memory addresses.
+     * @brief Elf's ELF hash table address in memory (DT_HASH), zero if not present.
      */
-    std::unordered_map<std::string, uintptr_t> symbols();
+    inline uintptr_t elfHashTable() const
+    {
+        return _elfHashTable;
+    }
+
+    /**
+     * @brief Elf's GNU hash table address in memory (DT_GNU_HASH), zero if not present.
+     */
+    inline uintptr_t gnuHashTable() const
+    {
+        return _gnuHashTable;
+    }
 
     /**
      * @brief Returns a map of symbols from the symbol table (SHT_SYMTAB) on disk.
@@ -425,7 +434,7 @@ public:
      * @param symbolName The name of the symbol to find.
      * @return The memory address of the symbol if found, otherwise zero.
      */
-    uintptr_t findSymbol(const std::string &symbolName);
+    uintptr_t findSymbol(const std::string &symbolName) const;
 
     /**
      * @brief Finds a symbol from the symbol table (SHT_SYMTAB) on disk by name.

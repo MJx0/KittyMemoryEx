@@ -80,7 +80,10 @@ std::vector<uintptr_t> KittyScannerMgr::findBytesAll(uintptr_t start,
             break;
 
         const size_t bytes_to_read = std::min(buf.size(), bytes_left);
-        const size_t bytes_read = _pMem->Read(current_remote, buf.data(), bytes_to_read, MemMode::SkipInaccessiblePages);
+        const size_t bytes_read = _pMem->Read(current_remote,
+                                              buf.data(),
+                                              bytes_to_read,
+                                              MemMode::SkipInaccessiblePages);
 
         // Handle failed reads or partial page reads on unmapped/protected memory
         if (bytes_read < pattern_len)
@@ -141,7 +144,10 @@ uintptr_t KittyScannerMgr::findBytesFirst(uintptr_t start,
             break;
 
         const size_t bytes_to_read = std::min(buf.size(), bytes_left);
-        const size_t bytes_read = _pMem->Read(current_remote, buf.data(), bytes_to_read, MemMode::SkipInaccessiblePages);
+        const size_t bytes_read = _pMem->Read(current_remote,
+                                              buf.data(),
+                                              bytes_to_read,
+                                              MemMode::SkipInaccessiblePages);
 
         // Handle failed reads or partial page reads on unmapped/protected memory
         if (bytes_read < pattern_len)
@@ -374,10 +380,11 @@ ElfScanner::ElfScanner(IKittyMemOp *pMem, uintptr_t elfBase, const std::vector<K
     _dynamic = 0;
     _stringTable = 0;
     _symbolTable = 0;
+    _elfHashTable = 0;
+    _gnuHashTable = 0;
     _strsz = 0;
     _syment = sizeof(KT_ElfW(Sym));
     _fixedBySoInfo = false;
-    _symbols_init = false;
     _dsymbols_init = false;
 
     if (!pMem || !elfBase)
@@ -583,6 +590,12 @@ ElfScanner::ElfScanner(IKittyMemOp *pMem, uintptr_t elfBase, const std::vector<K
                 case DT_SYMENT: // symbol entry size
                     _syment = dyn.d_un.d_val;
                     break;
+                case DT_HASH: // ELF hash table (for findSymbol)
+                    _elfHashTable = dyn.d_un.d_ptr;
+                    break;
+                case DT_GNU_HASH: // GNU hash table (for findSymbol)
+                    _gnuHashTable = dyn.d_un.d_ptr;
+                    break;
                 default:
                     break;
                 }
@@ -604,6 +617,8 @@ ElfScanner::ElfScanner(IKittyMemOp *pMem, uintptr_t elfBase, const std::vector<K
 
     fix_table_address(_stringTable);
     fix_table_address(_symbolTable);
+    fix_table_address(_elfHashTable);
+    fix_table_address(_gnuHashTable);
 
     _filepath = elfBaseMap.pathname;
     _realpath = elfBaseMap.pathname;
@@ -632,10 +647,11 @@ ElfScanner::ElfScanner(IKittyMemOp *pMem, const kitty_soinfo_t &soinfo, const st
     _dynamic = 0;
     _stringTable = 0;
     _symbolTable = 0;
+    _elfHashTable = 0;
+    _gnuHashTable = 0;
     _strsz = 0;
     _syment = 0;
     _fixedBySoInfo = false;
-    _symbols_init = false;
     _dsymbols_init = false;
 
     if (!pMem)
@@ -907,6 +923,14 @@ ElfScanner::ElfScanner(IKittyMemOp *pMem, const kitty_soinfo_t &soinfo, const st
                 case DT_SYMENT:
                     _syment = dyn.d_un.d_val;
                     break;
+                case DT_HASH:
+                    if (_elfHashTable == 0)
+                        _elfHashTable = dyn.d_un.d_ptr;
+                    break;
+                case DT_GNU_HASH:
+                    if (_gnuHashTable == 0)
+                        _gnuHashTable = dyn.d_un.d_ptr;
+                    break;
                 default:
                     break;
                 }
@@ -928,56 +952,163 @@ ElfScanner::ElfScanner(IKittyMemOp *pMem, const kitty_soinfo_t &soinfo, const st
 
     fix_table_address(_symbolTable);
     fix_table_address(_stringTable);
+    fix_table_address(_elfHashTable);
+    fix_table_address(_gnuHashTable);
 }
 #endif
 
-std::unordered_map<std::string, uintptr_t> ElfScanner::symbols()
+uintptr_t ElfScanner::findSymbol(const std::string &symbolName) const
 {
-    if (!_symbols_init && _loadBias && _stringTable && _symbolTable && _strsz && _syment)
-    {
-        _symbols_init = true;
+    if (!_loadBias || !_stringTable || !_symbolTable || !_strsz || !_syment)
+        return 0;
 
-        auto get_sym_address = [&](const KT_ElfW(Sym) * sym_ent) -> uintptr_t {
-            return sym_ent->st_value < _loadBias ? _loadBias + sym_ent->st_value : sym_ent->st_value;
-        };
+    auto get_sym_address = [&](const KT_ElfW(Sym) & sym) -> uintptr_t {
+        return sym.st_value < _loadBias ? _loadBias + sym.st_value : sym.st_value;
+    };
 
-        size_t symtab_sz = ((_stringTable > _symbolTable) ? (_stringTable - _symbolTable)
-                                                          : (_symbolTable - _stringTable));
-        std::vector<char> symtab_buff(symtab_sz, 0);
-        std::vector<char> strtab_buff(_strsz, 0);
+    // Reads exactly enough remote bytes to tell whether the string at `addr` equals `name`
+    // (name.size()+1 bytes, requiring a trailing NUL) - no need to guess a max name length.
+    auto remoteNameEquals = [&](uintptr_t addr, const std::string &name) -> bool {
+        std::vector<char> buff(name.size() + 1);
+        return _pMem->Read(addr, buff.data(), buff.size()) && buff.back() == '\0' &&
+               std::memcmp(buff.data(), name.data(), name.size()) == 0;
+    };
 
-        if (_pMem->Read(_symbolTable, symtab_buff.data(), symtab_buff.size()) &&
-            _pMem->Read(_stringTable, strtab_buff.data(), strtab_buff.size()))
+    // Classic SysV symbol hash (DT_HASH); System V ABI.
+    auto elfHashName = [](const std::string &name) -> uint32_t {
+        uint32_t h = 0, g;
+        for (unsigned char c : name)
         {
-            uintptr_t sym_start = uintptr_t(symtab_buff.data());
-            uintptr_t sym_end = uintptr_t(symtab_buff.data() + symtab_buff.size());
-            uintptr_t sym_str_end = uintptr_t(strtab_buff.data() + strtab_buff.size());
-            for (auto sym_entry = sym_start; (sym_entry + _syment) < sym_end; sym_entry += _syment)
-            {
-                const KT_ElfW(Sym) *curr_sym = reinterpret_cast<KT_ElfW(Sym) *>(sym_entry);
-
-                if (curr_sym->st_name >= _strsz)
-                    break;
-
-                if (intptr_t(curr_sym->st_name) <= 0 || intptr_t(curr_sym->st_value) <= 0 ||
-                    intptr_t(curr_sym->st_size) <= 0)
-                    continue;
-
-                if (KT_ELF_ST_TYPE(curr_sym->st_info) != STT_OBJECT && KT_ELF_ST_TYPE(curr_sym->st_info) != STT_FUNC)
-                    continue;
-
-                uintptr_t sym_str_addr = uintptr_t(strtab_buff.data() + curr_sym->st_name);
-                if (!sym_str_addr || sym_str_addr >= sym_str_end)
-                    continue;
-
-                std::string sym_str = std::string(reinterpret_cast<const char *>(sym_str_addr));
-                if (!sym_str.empty() && sym_str.data())
-                    _symbolsMap[sym_str] = get_sym_address(curr_sym);
-            }
+            h = (h << 4) + c;
+            g = h & 0xf0000000;
+            if (g)
+                h ^= g >> 24;
+            h &= ~g;
         }
-    }
+        return h;
+    };
 
-    return _symbolsMap;
+    // GNU symbol hash (DT_GNU_HASH); GNU extension to the ELF ABI.
+    auto gnuHashName = [](const std::string &name) -> uint32_t {
+        uint32_t h = 5381;
+        for (unsigned char c : name)
+            h = ((h << 5) + h) + c;
+        return h;
+    };
+
+    // Direct O(1)-average lookup via DT_HASH: jump straight to the one bucket the name hashes
+    // to and walk only its chain - never needs to know the table's total size.
+    auto elfHashLookup = [&](uintptr_t hashAddr, KT_ElfW(Sym) & outSym) -> bool {
+        if (!hashAddr)
+            return false;
+
+        uint32_t header[2] = {};
+        if (!_pMem->Read(hashAddr, header, sizeof(header)) || !header[0] || !header[1])
+            return false;
+        const uint32_t nbucket = header[0], nchain = header[1];
+
+        const uintptr_t bucketsAddr = hashAddr + sizeof(header);
+        const uintptr_t chainAddr = bucketsAddr + uintptr_t(nbucket) * sizeof(uint32_t);
+
+        const uint32_t nameHash = elfHashName(symbolName);
+        uint32_t symIdx = 0;
+        if (!_pMem->Read(bucketsAddr + (nameHash % nbucket) * sizeof(uint32_t), &symIdx, sizeof(symIdx)))
+            return false;
+
+        for (uint32_t steps = 0; symIdx != 0 && symIdx < nchain && steps < 1'000'000; ++steps)
+        {
+            KT_ElfW(Sym) sym{};
+            if (!_pMem->Read(_symbolTable + uintptr_t(symIdx) * _syment, &sym, sizeof(sym)))
+                return false;
+
+            if (sym.st_name < _strsz &&
+                (KT_ELF_ST_TYPE(sym.st_info) == STT_OBJECT || KT_ELF_ST_TYPE(sym.st_info) == STT_FUNC) &&
+                remoteNameEquals(_stringTable + sym.st_name, symbolName))
+            {
+                outSym = sym;
+                return true;
+            }
+
+            if (!_pMem->Read(chainAddr + uintptr_t(symIdx) * sizeof(uint32_t), &symIdx, sizeof(symIdx)))
+                return false;
+        }
+
+        return false;
+    };
+
+    // Direct O(1)-average lookup via DT_GNU_HASH, mirroring what the dynamic linker itself
+    // does: bloom filter fast-reject, then walk only the one bucket the name hashes to.
+    auto gnuHashLookup = [&](uintptr_t hashAddr, KT_ElfW(Sym) & outSym) -> bool {
+        if (!hashAddr)
+            return false;
+
+        struct
+        {
+            uint32_t nbuckets, symoffset, bloom_size, bloom_shift;
+        } hdr{};
+        if (!_pMem->Read(hashAddr, &hdr, sizeof(hdr)) || !hdr.nbuckets || !hdr.bloom_size ||
+            (hdr.bloom_size & (hdr.bloom_size - 1)) != 0)
+            return false;
+
+        const uintptr_t bloomAddr = hashAddr + sizeof(hdr);
+        const uintptr_t bucketsAddr = bloomAddr + uintptr_t(hdr.bloom_size) * sizeof(KT_ElfW(Addr));
+        const uintptr_t chainAddr = bucketsAddr + uintptr_t(hdr.nbuckets) * sizeof(uint32_t);
+
+        const uint32_t nameHash = gnuHashName(symbolName);
+        constexpr uint32_t wordBits = sizeof(KT_ElfW(Addr)) * 8;
+
+        KT_ElfW(Addr) bloomWord = 0;
+        if (!_pMem->Read(bloomAddr + (nameHash / wordBits) % hdr.bloom_size * sizeof(KT_ElfW(Addr)),
+                         &bloomWord,
+                         sizeof(bloomWord)))
+            return false;
+        const KT_ElfW(Addr) mask = (KT_ElfW(Addr)(1) << (nameHash % wordBits)) |
+                                   (KT_ElfW(Addr)(1) << ((nameHash >> hdr.bloom_shift) % wordBits));
+        if ((bloomWord & mask) != mask)
+            return false;
+
+        uint32_t symIdx = 0;
+        if (!_pMem->Read(bucketsAddr + (nameHash % hdr.nbuckets) * sizeof(uint32_t), &symIdx, sizeof(symIdx)))
+            return false;
+        if (symIdx < hdr.symoffset)
+            return false;
+
+        for (uint32_t steps = 0; steps < 1'000'000; ++steps)
+        {
+            KT_ElfW(Sym) sym{};
+            if (!_pMem->Read(_symbolTable + uintptr_t(symIdx) * _syment, &sym, sizeof(sym)) || sym.st_name >= _strsz)
+                return false;
+
+            uint32_t chainHash = 0;
+            if (!_pMem->Read(chainAddr + uintptr_t(symIdx - hdr.symoffset) * sizeof(uint32_t),
+                             &chainHash,
+                             sizeof(chainHash)))
+                return false;
+
+            if ((nameHash | 1) == (chainHash | 1) &&
+                (KT_ELF_ST_TYPE(sym.st_info) == STT_OBJECT || KT_ELF_ST_TYPE(sym.st_info) == STT_FUNC) &&
+                remoteNameEquals(_stringTable + sym.st_name, symbolName))
+            {
+                outSym = sym;
+                return true;
+            }
+
+            if (chainHash & 1)
+                return false;
+            ++symIdx;
+        }
+
+        return false;
+    };
+
+    KT_ElfW(Sym) sym{};
+    if (_gnuHashTable && gnuHashLookup(_gnuHashTable, sym))
+        return get_sym_address(sym);
+
+    if (_elfHashTable && elfHashLookup(_elfHashTable, sym))
+        return get_sym_address(sym);
+
+    return 0;
 }
 
 std::unordered_map<std::string, uintptr_t> ElfScanner::dsymbols()
@@ -1116,13 +1247,6 @@ std::unordered_map<std::string, uintptr_t> ElfScanner::dsymbols()
         cleanup();
     }
     return _dsymbolsMap;
-}
-
-uintptr_t ElfScanner::findSymbol(const std::string &symbolName)
-{
-    const auto &syms = symbols();
-    auto it = syms.find(symbolName);
-    return it != syms.end() ? it->second : 0;
 }
 
 uintptr_t ElfScanner::findDebugSymbol(const std::string &symbolName)
