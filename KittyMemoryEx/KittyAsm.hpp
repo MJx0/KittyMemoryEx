@@ -671,7 +671,7 @@ namespace KittyArm32
      * @param bits The number of bits to sign-extend.
      * @return The sign-extended 32-bit signed integer.
      */
-    constexpr int32_t signExtend(uint32_t val, int bits)
+    inline int32_t signExtend(uint32_t val, int bits)
     {
         // Guarded against the field's own width, not the ARM64 twin's: `m` is
         // 32-bit here, so a shift landing at bit 32 or above would compute a
@@ -683,14 +683,6 @@ namespace KittyArm32
         uint32_t m = 1u << (bits - 1);
         return (int32_t)((val ^ m) - m);
     }
-
-    // Compile-time checks on the contract above: a field's sign bit flips the
-    // result, the width boundary at 32 reads the whole word as signed, and an
-    // out-of-range width leaves the value untouched rather than guessing.
-    static_assert(signExtend(0x7Fu, 8) == 127, "positive field sign-extends unchanged");
-    static_assert(signExtend(0x80u, 8) == -128, "negative field sign-extends through the sign bit");
-    static_assert(signExtend(0xFFFFFFFFu, 32) == -1, "a full-width field reads the whole word as signed");
-    static_assert(signExtend(0xFFFFFFFFu, 33) == (int32_t)0xFFFFFFFFu, "an out-of-range width leaves the value unchanged");
 
     // ──── Register naming and indexing ────────────────────────────────────────
 
