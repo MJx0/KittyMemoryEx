@@ -109,7 +109,11 @@ typedef struct stat64 kt_stat64_t;
 #else
 
 #ifdef kITTYMEMORY_DEBUG
-#define KITTY_LOGD(fmt, ...) printf("D: " fmt "\n", ##__VA_ARGS__)
+#define KITTY_LOGD(fmt, ...)                                                                                           \
+    do                                                                                                                 \
+    {                                                                                                                  \
+        printf("D: " fmt "\n", ##__VA_ARGS__);                                                                         \
+    } while (0)
 #else
 #define KITTY_LOGD(fmt, ...)                                                                                           \
     do                                                                                                                 \
@@ -117,9 +121,24 @@ typedef struct stat64 kt_stat64_t;
     } while (0)
 #endif
 
-#define KITTY_LOGI(fmt, ...) printf("I: " fmt "\n", ##__VA_ARGS__)
-#define KITTY_LOGE(fmt, ...) fprintf(stderr, "E: " fmt "\n", ##__VA_ARGS__)
-#define KITTY_LOGW(fmt, ...) printf("W: " fmt "\n", ##__VA_ARGS__)
+#define KITTY_LOGI(fmt, ...)                                                                                           \
+    do                                                                                                                 \
+    {                                                                                                                  \
+        printf("I: " fmt "\n", ##__VA_ARGS__);                                                                         \
+    } while (0)
+
+#define KITTY_LOGE(fmt, ...)                                                                                           \
+    do                                                                                                                 \
+    {                                                                                                                  \
+        fflush(stdout);                                                                                                \
+        fprintf(stderr, "E: " fmt "\n", ##__VA_ARGS__);                                                                \
+    } while (0)
+
+#define KITTY_LOGW(fmt, ...)                                                                                           \
+    do                                                                                                                 \
+    {                                                                                                                  \
+        printf("W: " fmt "\n", ##__VA_ARGS__);                                                                         \
+    } while (0)
 
 #endif
 
