@@ -132,6 +132,7 @@ typedef struct stat64 kt_stat64_t;
     {                                                                                                                  \
         fflush(stdout);                                                                                                \
         fprintf(stderr, "E: " fmt "\n", ##__VA_ARGS__);                                                                \
+        fflush(stderr);                                                                                                \
     } while (0)
 
 #define KITTY_LOGW(fmt, ...)                                                                                           \
