@@ -1,5 +1,184 @@
 #include "KittyTrace.hpp"
 
+static const char *rpCallStatusStr(KT_RP_CALL_STATUS status)
+{
+    switch (status)
+    {
+    case KT_RP_CALL_FAILED:
+        return "FAILED";
+    case KT_RP_CALL_SUCCESS:
+        return "SUCCESS";
+    case KT_RP_CALL_TIMEOUT:
+        return "TIMEOUT";
+    case KT_RP_CALL_EXITED:
+        return "EXITED";
+    case KT_RP_CALL_CONT_FAILED:
+        return "CONT_FAILED";
+    case KT_RP_CALL_REGS_FAILED:
+        return "REGS_FAILED";
+    case KT_RP_CALL_WAIT_FAILED:
+        return "WAIT_FAILED";
+    case KT_RP_CALL_MEM_FAILED:
+        return "MEM_FAILED";
+    case KT_RP_CALL_STEP_FAILED:
+        return "STEP_FAILED";
+    case KT_RP_CALL_NOT_STOPPED:
+        return "NOT_STOPPED";
+    case KT_RP_CALL_MISMATCH_STOP:
+        return "MISMATCH_STOP";
+    }
+
+    return "UNKNOWN";
+}
+
+static const char *bpResultStr(KT_BP_RESULT result)
+{
+    switch (result)
+    {
+    case KT_BP_FAILED:
+        return "FAILED";
+    case KT_BP_SUCCESS:
+        return "SUCCESS";
+    case KT_BP_TIMEOUT:
+        return "TIMEOUT";
+    case KT_BP_EXITED:
+        return "EXITED";
+    case KT_BP_CONT_FAILED:
+        return "CONT_FAILED";
+    case KT_BP_STEP_FAILED:
+        return "STEP_FAILED";
+    case KT_BP_REGS_FAILED:
+        return "REGS_FAILED";
+    case KT_BP_WAIT_FAILED:
+        return "WAIT_FAILED";
+    case KT_BP_MEM_FAILED:
+        return "MEM_FAILED";
+    case KT_BP_NOT_STOPPED:
+        return "NOT_STOPPED";
+    case KT_BP_MISMATCH_STOP:
+        return "MISMATCH_STOP";
+    }
+
+    return "UNKNOWN";
+}
+
+static const char *siCodeStr(int signo, int code)
+{
+    switch (code)
+    {
+    case SI_USER:
+        return "SI_USER";
+#ifdef SI_KERNEL
+    case SI_KERNEL:
+        return "SI_KERNEL";
+#endif
+    case SI_QUEUE:
+        return "SI_QUEUE";
+    case SI_TIMER:
+        return "SI_TIMER";
+    case SI_TKILL:
+        return "SI_TKILL";
+    default:
+        break;
+    }
+
+    if (signo == SIGTRAP)
+    {
+        switch (code)
+        {
+        case TRAP_BRKPT:
+            return "TRAP_BRKPT";
+        case TRAP_TRACE:
+            return "TRAP_TRACE";
+        case TRAP_BRANCH:
+            return "TRAP_BRANCH";
+        case TRAP_HWBKPT:
+            return "TRAP_HWBKPT";
+        }
+    }
+    else if (signo == SIGSEGV)
+    {
+        switch (code)
+        {
+        case SEGV_MAPERR:
+            return "SEGV_MAPERR";
+        case SEGV_ACCERR:
+            return "SEGV_ACCERR";
+        }
+    }
+    else if (signo == SIGBUS)
+    {
+        switch (code)
+        {
+        case BUS_ADRALN:
+            return "BUS_ADRALN";
+        case BUS_ADRERR:
+            return "BUS_ADRERR";
+        case BUS_OBJERR:
+            return "BUS_OBJERR";
+        }
+    }
+    else if (signo == SIGILL)
+    {
+        switch (code)
+        {
+        case ILL_ILLOPC:
+            return "ILL_ILLOPC";
+        case ILL_ILLOPN:
+            return "ILL_ILLOPN";
+        case ILL_ILLADR:
+            return "ILL_ILLADR";
+        case ILL_PRVOPC:
+            return "ILL_PRVOPC";
+        }
+    }
+
+    return "?";
+}
+
+static void logFaultContext(pid_t pid, const char *prefix, const user_regs_struct &regs)
+{
+    siginfo_t si = {};
+    ptrace(PTRACE_GETSIGINFO, pid, 0, &si);
+
+#if defined(__aarch64__) || defined(__arm__)
+    KITTY_LOGE("%s: Regs PC=%p LR=%p SP=%p RET=%p",
+               prefix,
+               (void *)regs.KT_REG_PC,
+               (void *)regs.KT_REG_LR,
+               (void *)regs.KT_REG_SP,
+               (void *)regs.KT_REG_RET);
+#else
+    KITTY_LOGE("%s: Regs PC=%p SP=%p RET=%p",
+               prefix,
+               (void *)regs.KT_REG_PC,
+               (void *)regs.KT_REG_SP,
+               (void *)regs.KT_REG_RET);
+#endif
+
+    KITTY_LOGE("%s: Signal %s (si_signo=%d, si_code=%s[%d], si_addr=%p)",
+               prefix,
+               strsignal(si.si_signo),
+               si.si_signo,
+               siCodeStr(si.si_signo, si.si_code),
+               si.si_code,
+               (void *)si.si_addr);
+
+    auto fmap = KittyMemoryEx::getAddressMap(pid, uintptr_t(si.si_addr));
+    if (fmap.isValid())
+        KITTY_LOGE("%s: Fault addr in map <base>+%p %s",
+                   prefix,
+                   (void *)((fmap.offset + uintptr_t(si.si_addr)) - fmap.startAddress),
+                   fmap.toString().c_str());
+
+    auto pcmap = KittyMemoryEx::getAddressMap(pid, uintptr_t(regs.KT_REG_PC));
+    if (pcmap.isValid())
+        KITTY_LOGE("%s: PC in map <base>+%p %s",
+                   prefix,
+                   (void *)((pcmap.offset + uintptr_t(regs.KT_REG_PC)) - pcmap.startAddress),
+                   pcmap.toString().c_str());
+}
+
 bool KittyTraceMgr::attach(int options)
 {
     if (_pid <= 0)
@@ -14,16 +193,16 @@ bool KittyTraceMgr::attach(int options)
     errno = 0;
     if (ptrace(PTRACE_ATTACH, _pid, nullptr, options) == -1L)
     {
-        KITTY_LOGE("PTRACE_ATTACH failed for pid %d. \"%s\".", _pid, strerror(errno));
+        KITTY_LOGE("PTRACE_ATTACH failed for pid %d. strerror=\"%s\".", _pid, strerror(errno));
         return false;
     }
 
     _seized = false;
 
     int status;
-    if (waitpid(_pid, &status, 0) != _pid || !WIFSTOPPED(status))
+    if (KT_EINTR_RETRY(waitpid(_pid, &status, 0)) != _pid || !WIFSTOPPED(status))
     {
-        KITTY_LOGE("Error occurred while waiting for pid %d to stop. \"%s\".", _pid, strerror(errno));
+        KITTY_LOGE("Error occurred while waiting for pid %d to stop. strerror=\"%s\".", _pid, strerror(errno));
         ptrace(PTRACE_DETACH, _pid, nullptr, nullptr);
         return false;
     }
@@ -50,7 +229,7 @@ bool KittyTraceMgr::seize(int options)
     errno = 0;
     if (ptrace(PTRACE_SEIZE, _pid, nullptr, options) == -1L)
     {
-        KITTY_LOGE("PTRACE_SEIZE failed for pid %d. \"%s\".", _pid, strerror(errno));
+        KITTY_LOGE("PTRACE_SEIZE failed for pid %d. strerror=\"%s\".", _pid, strerror(errno));
         return false;
     }
 
@@ -65,7 +244,7 @@ bool KittyTraceMgr::setOptions(int options)
     errno = 0;
     if (ptrace(PTRACE_SETOPTIONS, _pid, nullptr, options) == -1L)
     {
-        KITTY_LOGE("PTRACE_SETOPTIONS failed for pid %d. \"%s\".", _pid, strerror(errno));
+        KITTY_LOGE("PTRACE_SETOPTIONS failed for pid %d. strerror=\"%s\".", _pid, strerror(errno));
         return false;
     }
 
@@ -89,7 +268,7 @@ bool KittyTraceMgr::detach()
     errno = 0;
     if (ptrace(PTRACE_DETACH, _pid, nullptr, nullptr) == -1L)
     {
-        KITTY_LOGE("PTRACE_DETACH failed for pid %d. \"%s\".", _pid, strerror(errno));
+        KITTY_LOGE("PTRACE_DETACH failed for pid %d. strerror=\"%s\".", _pid, strerror(errno));
         return false;
     }
 
@@ -114,7 +293,7 @@ bool KittyTraceMgr::stop()
     {
         if (ptrace(PTRACE_INTERRUPT, _pid, nullptr, nullptr) == -1L)
         {
-            KITTY_LOGE("PTRACE_INTERRUPT failed for pid %d. \"%s\".", _pid, strerror(errno));
+            KITTY_LOGE("PTRACE_INTERRUPT failed for pid %d. strerror=\"%s\".", _pid, strerror(errno));
             return false;
         }
     }
@@ -122,17 +301,22 @@ bool KittyTraceMgr::stop()
     {
         if (tgkill(_pid, _pid, SIGSTOP) == -1)
         {
-            KITTY_LOGE("tgkill failed for pid %d. \"%s\".", _pid, strerror(errno));
+            KITTY_LOGE("tgkill failed for pid %d. strerror=\"%s\".", _pid, strerror(errno));
             return false;
         }
     }
 
     int status;
-    if (waitpid(_pid, &status, 0) != _pid || !WIFSTOPPED(status))
+    if (KT_EINTR_RETRY(waitpid(_pid, &status, 0)) != _pid || !WIFSTOPPED(status))
     {
-        KITTY_LOGE("Error occurred while waiting for pid %d to stop. \"%s\".", _pid, strerror(errno));
+        KITTY_LOGE("Error occurred while waiting for pid %d to stop. strerror=\"%s\".", _pid, strerror(errno));
         return false;
     }
+
+    // Drain stacked stop notifications (e.g. a group-stop alongside our INTERRUPT) so a
+    // later wait isn't desynced; reaping them doesn't resume the tracee.
+    while (waitpid(_pid, nullptr, __WALL | WNOHANG) > 0)
+        ;
 
     return true;
 }
@@ -145,7 +329,7 @@ bool KittyTraceMgr::cont(int sig)
     errno = 0;
     if (ptrace(PTRACE_CONT, _pid, nullptr, sig) == -1L)
     {
-        KITTY_LOGE("PTRACE_CONT failed for pid %d. \"%s\".", _pid, strerror(errno));
+        KITTY_LOGE("PTRACE_CONT failed for pid %d. strerror=\"%s\".", _pid, strerror(errno));
         return false;
     }
 
@@ -158,7 +342,7 @@ pid_t KittyTraceMgr::wait(int *status, int options, int timeout_ms) const
         return -1;
 
     if (timeout_ms <= 0)
-        return waitpid(_pid, status, options);
+        return KT_EINTR_RETRY(waitpid(_pid, status, options));
 
     int elapsed = 0;
     pid_t res;
@@ -167,7 +351,7 @@ pid_t KittyTraceMgr::wait(int *status, int options, int timeout_ms) const
 
     while (elapsed < timeout_ms)
     {
-        res = waitpid(_pid, status, options);
+        res = KT_EINTR_RETRY(waitpid(_pid, status, options));
         if (res != 0)
             return res;
 
@@ -186,14 +370,17 @@ bool KittyTraceMgr::waitSyscall() const
     errno = 0;
     if (ptrace(PTRACE_SYSCALL, _pid, nullptr, nullptr) == -1L)
     {
-        KITTY_LOGE("PTRACE_SYSCALL failed for pid %d. \"%s\".", _pid, strerror(errno));
+        KITTY_LOGE("PTRACE_SYSCALL failed for pid %d. strerror=\"%s\".", _pid, strerror(errno));
         return false;
     }
 
     int status = 0;
-    waitpid(_pid, &status, 0);
+    KT_EINTR_RETRY(waitpid(_pid, &status, 0));
     if (!WIFSTOPPED(status))
+    {
+        KITTY_LOGE("waitSyscall: pid %d did not stop after PTRACE_SYSCALL (status=0x%x).", _pid, status);
         return false;
+    }
 
     return true;
 }
@@ -209,15 +396,22 @@ bool KittyTraceMgr::step(int steps) const
         errno = 0;
         if (ptrace(PTRACE_SINGLESTEP, _pid, nullptr, nullptr) == -1L)
         {
-            KITTY_LOGE("PTRACE_SINGLESTEP failed for pid %d. \"%s\".", _pid, strerror(errno));
+            KITTY_LOGE("PTRACE_SINGLESTEP failed for pid %d. strerror=\"%s\".", _pid, strerror(errno));
             return false;
         }
 
         if ((i + 1) < steps)
         {
-            waitpid(_pid, &status, 0);
+            KT_EINTR_RETRY(waitpid(_pid, &status, 0));
             if (!WIFSTOPPED(status))
+            {
+                KITTY_LOGE("step: pid %d did not stop after single-step %d/%d (status=0x%x).",
+                           _pid,
+                           i + 1,
+                           steps,
+                           status);
                 return false;
+            }
         }
     }
 
@@ -235,13 +429,20 @@ bool KittyTraceMgr::waitStep(int steps) const
         errno = 0;
         if (ptrace(PTRACE_SINGLESTEP, _pid, nullptr, nullptr) == -1L)
         {
-            KITTY_LOGE("PTRACE_SINGLESTEP failed for pid %d. \"%s\".", _pid, strerror(errno));
+            KITTY_LOGE("PTRACE_SINGLESTEP failed for pid %d. strerror=\"%s\".", _pid, strerror(errno));
             return false;
         }
 
-        waitpid(_pid, &status, 0);
+        KT_EINTR_RETRY(waitpid(_pid, &status, 0));
         if (!WIFSTOPPED(status))
+        {
+            KITTY_LOGE("waitStep: pid %d did not stop after single-step %d/%d (status=0x%x).",
+                       _pid,
+                       i + 1,
+                       steps,
+                       status);
             return false;
+        }
     }
 
     return true;
@@ -264,7 +465,7 @@ bool KittyTraceMgr::getRegs(user_regs_struct *regs) const
 #endif
     if (ret == -1L)
     {
-        KITTY_LOGE("PTRACE_GETREGS failed for pid %d. \"%s\".", _pid, strerror(errno));
+        KITTY_LOGE("PTRACE_GETREGS failed for pid %d. strerror=\"%s\".", _pid, strerror(errno));
         return false;
     }
 
@@ -288,7 +489,7 @@ bool KittyTraceMgr::setRegs(user_regs_struct *regs) const
 #endif
     if (ret == -1L)
     {
-        KITTY_LOGE("PTRACE_SETREGS failed for pid %d. \"%s\".", _pid, strerror(errno));
+        KITTY_LOGE("PTRACE_SETREGS failed for pid %d. strerror=\"%s\".", _pid, strerror(errno));
         return false;
     }
 
@@ -377,6 +578,8 @@ kitty_rp_call_t KittyTraceMgr::_callFunctionFrom(uintptr_t callerAddress, uintpt
     if (!_attached || _pid <= 0 || functionAddress == 0)
         return {KT_RP_CALL_FAILED, {0}};
 
+    std::string ctx = KittyUtils::String::fmt("callFunction(pid(%d), addr(%p))", _pid, (void *)functionAddress);
+
     user_regs_struct backup_regs, return_regs, tmp_regs;
     memset(&backup_regs, 0, sizeof(backup_regs));
     memset(&return_regs, 0, sizeof(return_regs));
@@ -385,17 +588,15 @@ kitty_rp_call_t KittyTraceMgr::_callFunctionFrom(uintptr_t callerAddress, uintpt
     // backup current regs
     if (!getRegs(&backup_regs))
     {
-        KITTY_LOGE("callFunction(%p): Failed, couldn't get regs.", (void *)functionAddress);
+        KITTY_LOGE("%s: Failed, couldn't get regs.", ctx.c_str());
         return {KT_RP_CALL_REGS_FAILED, {0}};
     }
 
     memcpy(&tmp_regs, &backup_regs, sizeof(backup_regs));
 
-    KT_REGS_ALIGN_STACK(backup_regs);
     KT_REGS_ALIGN_STACK(tmp_regs);
-    KT_REGS_ALIGN_STACK(return_regs);
 
-    KITTY_LOGD("callFunction(%p): Calling with %d args.", (void *)functionAddress, nargs);
+    KITTY_LOGD("%s: Calling with %d args.", ctx.c_str(), nargs);
 
     std::vector<uintptr_t> vargs(nargs, 0);
     if (nargs > 0)
@@ -411,7 +612,7 @@ kitty_rp_call_t KittyTraceMgr::_callFunctionFrom(uintptr_t callerAddress, uintpt
 
     // cleanup failure return
     auto failure_return = [&](KT_RP_CALL_STATUS s = KT_RP_CALL_FAILED) -> kitty_rp_call_t {
-        KITTY_LOGE("callFunction(%p): Failed.", (void *)functionAddress);
+        KITTY_LOGE("%s: Failed (%s).", ctx.c_str(), rpCallStatusStr(s));
         if (_autoRestoreRegs)
             setRegs(&backup_regs);
         return {s, {0}};
@@ -572,25 +773,25 @@ kitty_rp_call_t KittyTraceMgr::_callFunctionFrom(uintptr_t callerAddress, uintpt
             if (wp == 0)
             {
                 stop();
-                KITTY_LOGE("callFunction(%p): timedout!", (void *)functionAddress);
+                KITTY_LOGE("%s: Timed out!", ctx.c_str());
                 return failure_return(KT_RP_CALL_TIMEOUT);
             }
 
-            KITTY_LOGE("callFunction(%p): waitpid return %d. \"%s\".", (void *)functionAddress, wp, strerror(errno));
+            KITTY_LOGE("%s: waitpid returned %d. strerror=\"%s\".", ctx.c_str(), wp, strerror(errno));
             return failure_return(KT_RP_CALL_WAIT_FAILED);
         }
 
         if (WIFEXITED(status))
         {
             _attached = false;
-            KITTY_LOGE("callFunction(%p): Target process exited (%d).", (void *)functionAddress, WEXITSTATUS(status));
+            KITTY_LOGE("%s: Target process exited (status %d).", ctx.c_str(), WEXITSTATUS(status));
             return {KT_RP_CALL_EXITED, {0}};
         }
 
         if (WIFSIGNALED(status))
         {
             _attached = false;
-            KITTY_LOGE("callFunction(%p): Target process terminated (%d).", (void *)functionAddress, WTERMSIG(status));
+            KITTY_LOGE("%s: Target process killed by signal %s.", ctx.c_str(), strsignal(WTERMSIG(status)));
             return {KT_RP_CALL_EXITED, {0}};
         }
 
@@ -608,46 +809,32 @@ kitty_rp_call_t KittyTraceMgr::_callFunctionFrom(uintptr_t callerAddress, uintpt
         if (!getRegs(&return_regs))
             return failure_return(KT_RP_CALL_REGS_FAILED);
 
-        KITTY_LOGD("callFunction(%p): Ok.", (void *)functionAddress);
+        KITTY_LOGD("%s: Ok.", ctx.c_str());
 
         if (validate_ret(return_regs, callerAddress))
             break;
 
-        KITTY_LOGE("callFunction(%p): Process didn't jump to specified return address (%p)",
-                   (void *)functionAddress,
-                   (void *)callerAddress);
-
-        KITTY_LOGE("callFunction(%p): PC(%p) | RET(%p).",
-                   (void *)functionAddress,
-                   (void *)(return_regs.KT_REG_PC),
-                   (void *)(return_regs.KT_REG_RET));
-
+        // An asynchronous signal (sent via kill/sigqueue/tgkill, si_code <= 0 - e.g.
+        // the runtime's SIGRTMIN+x) delivered to the thread mid-call is NOT our return and
+        // does not mean the call failed. We must NOT run its handler: the thread is hijacked
+        // (fake stack, LR=sentinel), so the handler would execute in an invalid context.
+        // Suppress it (cont with sig 0) and keep waiting for the call to finish.
+        // Only a synchronous fault (si_code > 0) at a non-caller PC is a genuine crash.
         siginfo_t si = {};
         getSignalInfo(&si);
-
-        KITTY_LOGE("callFunction(%p): SIG(%s) | CODE(%d) | ADDR(%p).",
-                   (void *)functionAddress,
-                   strsignal(si.si_signo),
-                   si.si_code,
-                   (void *)(si.si_addr));
-
-        auto map = KittyMemoryEx::getAddressMap(_pid, uintptr_t(si.si_addr));
-        if (map.isValid())
+        if (si.si_code <= 0)
         {
-            KITTY_LOGE("callFunction(%p): Fault Map(<base>+%p) %s",
-                       (void *)functionAddress,
-                       (void *)((map.offset + uintptr_t(si.si_addr)) - map.startAddress),
-                       map.toString().c_str());
+            if (!cont(0)) // suppress: do not run a handler on the hijacked thread
+                return failure_return(KT_RP_CALL_CONT_FAILED);
+            continue;
         }
 
-        map = KittyMemoryEx::getAddressMap(_pid, return_regs.KT_REG_PC);
-        if (map.isValid())
-        {
-            KITTY_LOGE("callFunction(%p): PC Map(<base>+%p) %s",
-                       (void *)functionAddress,
-                       (void *)((map.offset + return_regs.KT_REG_PC) - map.startAddress),
-                       map.toString().c_str());
-        }
+        KITTY_LOGE("%s: Process did not return to caller %p after the call (PC=%p, StopSig=%s).",
+                   ctx.c_str(),
+                   (void *)callerAddress,
+                   (void *)return_regs.KT_REG_PC,
+                   strsignal(WSTOPSIG(status)));
+        logFaultContext(_pid, ctx.c_str(), return_regs);
 
         if (!cont(WSTOPSIG(status)))
             return failure_return(KT_RP_CALL_CONT_FAILED);
@@ -671,6 +858,8 @@ kitty_rp_call_t KittyTraceMgr::_callSyscall(long sysnr, int nargs, ...)
     if (!_attached || _pid <= 0)
         return {KT_RP_CALL_FAILED, {0}};
 
+    std::string ctx = KittyUtils::String::fmt("callSyscall(pid(%d), sysnr(%d))", _pid, int(sysnr));
+
     user_regs_struct backup_regs, return_regs, tmp_regs;
     memset(&backup_regs, 0, sizeof(backup_regs));
     memset(&return_regs, 0, sizeof(return_regs));
@@ -679,15 +868,13 @@ kitty_rp_call_t KittyTraceMgr::_callSyscall(long sysnr, int nargs, ...)
     // backup current regs
     if (!getRegs(&backup_regs))
     {
-        KITTY_LOGE("callSyscall(%d): Failed, couldn't get regs.", int(sysnr));
+        KITTY_LOGE("%s: Failed, couldn't get regs.", ctx.c_str());
         return {KT_RP_CALL_REGS_FAILED, {0}};
     }
 
     memcpy(&tmp_regs, &backup_regs, sizeof(backup_regs));
 
-    KT_REGS_ALIGN_STACK(backup_regs);
     KT_REGS_ALIGN_STACK(tmp_regs);
-    KT_REGS_ALIGN_STACK(return_regs);
 
     std::vector<uintptr_t> vargs(6, 0);
     if (nargs > 0)
@@ -710,74 +897,75 @@ kitty_rp_call_t KittyTraceMgr::_callSyscall(long sysnr, int nargs, ...)
                vargs[4],
                vargs[5]);
 
+    // Run the syscall with PTRACE_SYSCALL:
+    // resume to the syscall-entry stop, then to the syscall-exit stop.
+    // When a gadget is set we execute its svc and modify no target memory
+    // otherwise we temporarily place a svc at the current PC and restore it afterwards.
     uintptr_t target_pc_mem = tmp_regs.KT_REG_PC;
-    std::vector<uint8_t> syscall_code;
-    std::vector<uint8_t> backup_code;
-    if (_syscallGadget != 0)
-    {
-        KITTY_LOGD("callSyscall(%d) using syscall gadget at %p", int(sysnr), (void *)_syscallGadget);
-        tmp_regs.KT_REG_PC = _syscallGadget;
-    }
+
+#if defined(__arm__)
+    // Thumb mode: from the gadget's low bit if a gadget is set, else from PC / CPSR.
+    bool thumb = _syscallGadget != 0 ? (_syscallGadget & 1) != 0
+                                     : ((target_pc_mem & 1) != 0 || (tmp_regs.KT_REG_CPSR & KT_CPSR_T_MASK) != 0);
+#endif
+
+    // Syscall instruction encoding for this arch/mode.
+    std::vector<uint8_t> syscall_insn;
+#if defined(__arm__)
+    if (thumb)
+        syscall_insn.assign(std::begin(KittyTraceInsns::THUMB_SYSCALL), std::end(KittyTraceInsns::THUMB_SYSCALL));
     else
+        syscall_insn.assign(std::begin(KittyTraceInsns::SYSCALL), std::end(KittyTraceInsns::SYSCALL));
+#else
+    syscall_insn.assign(std::begin(KittyTraceInsns::SYSCALL), std::end(KittyTraceInsns::SYSCALL));
+#endif
+
+    // Where the svc runs. With a gadget nothing is written; otherwise we patch the PC.
+    uintptr_t exec_addr = _syscallGadget != 0 ? _syscallGadget : target_pc_mem;
+#if defined(__arm__)
+    exec_addr &= ~uintptr_t(1); // strip the thumb bit; mode is carried in CPSR.T
+#endif
+
+    const bool wrote_syscall = _syscallGadget == 0;
+    std::vector<uint8_t> backup_code;
+    if (wrote_syscall)
     {
-        if (!KittyMemoryEx::getAddressMap(_pid, target_pc_mem).executable)
+        if (!KittyMemoryEx::getAddressMap(_pid, exec_addr).executable)
         {
-            KITTY_LOGE("callSyscall(%d): PC(%p) is not in executable memory region!", int(sysnr), (void *)target_pc_mem);
+            KITTY_LOGE("%s: PC %p is not in executable memory!", ctx.c_str(), (void *)exec_addr);
             return {KT_RP_CALL_MEM_FAILED, {0}};
         }
 
-#if defined(__arm__)
-        bool thumb = (target_pc_mem & 1) != 0 || (tmp_regs.KT_REG_CPSR & KT_CPSR_T_MASK) != 0;
-        target_pc_mem &= ~1;
-        if (thumb)
-            syscall_code.assign(std::begin(KittyTraceInsns::THUMB_SYSCALL), std::end(KittyTraceInsns::THUMB_SYSCALL));
-        else
-            syscall_code.assign(std::begin(KittyTraceInsns::SYSCALL), std::end(KittyTraceInsns::SYSCALL));
-#else
-        syscall_code.assign(std::begin(KittyTraceInsns::SYSCALL), std::end(KittyTraceInsns::SYSCALL));
-#endif
-
-        backup_code.resize(syscall_code.size(), 0);
-        if (!peekMem(target_pc_mem, backup_code.data(), backup_code.size()))
+        backup_code.resize(syscall_insn.size(), 0);
+        if (!peekMem(exec_addr, backup_code.data(), backup_code.size()))
         {
-            KITTY_LOGE("callSyscall(%d): Failed to backup PC(%p) memory code.", int(sysnr), (void *)target_pc_mem);
+            KITTY_LOGE("%s: Failed to back up code at %p.", ctx.c_str(), (void *)exec_addr);
             return {KT_RP_CALL_MEM_FAILED, {0}};
         }
     }
 
     // cleanup failure return
     auto failure_return = [&](KT_RP_CALL_STATUS s = KT_RP_CALL_FAILED) -> kitty_rp_call_t {
-        KITTY_LOGE("callSyscall(%d): Failed.", int(sysnr));
+        KITTY_LOGE("%s: Failed (%s).", ctx.c_str(), rpCallStatusStr(s));
 
         if (_autoRestoreRegs)
             setRegs(&backup_regs);
 
-        if (_syscallGadget == 0)
-        {
-            pokeMem(target_pc_mem, backup_code.data(), backup_code.size());
-        }
+        if (wrote_syscall)
+            pokeMem(exec_addr, backup_code.data(), backup_code.size());
         return {s, {0}};
     };
 
-#if defined(__aarch64__)
-    // Clear Single-step (Bit 21) and Debug Exception (Bit 9)
-    // tmp_regs.pstate &= ~KT_CPSR_SS_MASK;
-    // tmp_regs.pstate &= ~KT_CPSR_D_MASK;
+    tmp_regs.KT_REG_PC = exec_addr;
 
-    // Clear BTYPE (Bits 10 & 11) to bypass BTI enforcement
+#if defined(__aarch64__)
+    // Clear BTYPE (Bits 10 & 11) to bypass BTI enforcement at the syscall instruction.
     tmp_regs.pstate &= ~KT_CPSR_BTYPE_MASK;
 #elif defined(__arm__)
-    if (tmp_regs.KT_REG_PC & 1)
-    {
-        // thumb
-        tmp_regs.KT_REG_PC &= (~1u);
+    if (thumb)
         tmp_regs.KT_REG_CPSR |= KT_CPSR_T_MASK;
-    }
     else
-    {
-        // arm
         tmp_regs.KT_REG_CPSR &= ~KT_CPSR_T_MASK;
-    }
 #endif
 
 #if defined(__arm__) || defined(__aarch64__)
@@ -812,14 +1000,13 @@ kitty_rp_call_t KittyTraceMgr::_callSyscall(long sysnr, int nargs, ...)
 
     tmp_regs.KT_REG_SYSNR = sysnr;
 
-    if (_syscallGadget == 0)
+    // For the no-gadget fallback, temporarily write a svc at the current PC.
+    if (wrote_syscall)
     {
-        if (!pokeMem(target_pc_mem, syscall_code.data(), syscall_code.size()))
+        if (!pokeMem(exec_addr, syscall_insn.data(), syscall_insn.size()))
         {
-            KITTY_LOGE("callSyscall(%d): Failed to write syscall code into PC(%p) memory.",
-                       int(sysnr),
-                       (void *)target_pc_mem);
-            return {KT_RP_CALL_MEM_FAILED, {0}};
+            KITTY_LOGE("%s: Failed to write svc at %p.", ctx.c_str(), (void *)exec_addr);
+            return failure_return(KT_RP_CALL_MEM_FAILED);
         }
     }
 
@@ -827,109 +1014,95 @@ kitty_rp_call_t KittyTraceMgr::_callSyscall(long sysnr, int nargs, ...)
     if (!setRegs(&tmp_regs))
         return failure_return(KT_RP_CALL_REGS_FAILED);
 
-    // Single step to execute syscall
-    if (!step())
-        return failure_return(KT_RP_CALL_STEP_FAILED);
-
-    // Wait for step
-    do
+    // Execute one syscall via two PTRACE_SYSCALL stops (entry, exit)
+    // result is then in the result register.
+    // Group-stops/benign signals are dropped, real signals re-delivered.
+    int phase = 0;       // 0: awaiting syscall-entry, 1: awaiting syscall-exit
+    int deliver_sig = 0; // signal to re-inject on the next resume
+    while (phase < 2)
     {
         errno = 0;
+        if (ptrace(PTRACE_SYSCALL, _pid, nullptr, (void *)(intptr_t)deliver_sig) == -1L)
+        {
+            KITTY_LOGE("%s: PTRACE_SYSCALL failed. strerror=\"%s\".", ctx.c_str(), strerror(errno));
+            return failure_return(KT_RP_CALL_CONT_FAILED);
+        }
+        deliver_sig = 0;
+
         int status = 0;
-        pid_t wp = wait(&status, WUNTRACED);
+        pid_t wp = wait(&status, __WALL);
         if (wp != _pid)
         {
-            KITTY_LOGE("callSyscall(%d): waitpid returned %d. \"%s\".", int(sysnr), wp, strerror(errno));
+            KITTY_LOGE("%s: waitpid returned %d. strerror=\"%s\".", ctx.c_str(), wp, strerror(errno));
             return failure_return(KT_RP_CALL_WAIT_FAILED);
         }
 
         if (WIFEXITED(status))
         {
             _attached = false;
-            KITTY_LOGE("callSyscall(%d): Target process exited (%d).", int(sysnr), WEXITSTATUS(status));
+            KITTY_LOGE("%s: Target process exited (status %d).", ctx.c_str(), WEXITSTATUS(status));
             return {KT_RP_CALL_EXITED, {0}};
         }
 
         if (WIFSIGNALED(status))
         {
             _attached = false;
-            KITTY_LOGE("callSyscall(%d): Target process terminated (%d).", int(sysnr), WTERMSIG(status));
+            KITTY_LOGE("%s: Target process killed by signal %d.", ctx.c_str(), WTERMSIG(status));
             return {KT_RP_CALL_EXITED, {0}};
         }
 
         if (!WIFSTOPPED(status))
             continue;
 
-        if (WSTOPSIG(status) == SIGCHLD || WSTOPSIG(status) == SIGSTOP || WSTOPSIG(status) == SIGTSTP)
-        {
-            if (!cont())
-                return failure_return(KT_RP_CALL_CONT_FAILED);
+        const int sig = WSTOPSIG(status);
 
+        // syscall-entry / syscall-exit stop. With PTRACE_O_TRACESYSGOOD the kernel
+        // sets bit 7; without it a syscall stop is a plain SIGTRAP, which in this
+        // controlled run at a svc can only be our own syscall stop.
+        if (sig == (SIGTRAP | 0x80) || sig == SIGTRAP)
+        {
+            ++phase;
             continue;
         }
 
-        if (!getRegs(&return_regs))
-            return failure_return(KT_RP_CALL_REGS_FAILED);
+        // group-stop (seized) / job-control signals: resume, drop the signal.
+        if (sig == SIGSTOP || sig == SIGTSTP || sig == SIGTTIN || sig == SIGTTOU || sig == SIGCHLD)
+            continue;
 
-        if (return_regs.KT_REG_PC > tmp_regs.KT_REG_PC && return_regs.KT_REG_PC <= tmp_regs.KT_REG_PC + 16)
-            break;
-
-        KITTY_LOGE("callSyscall(%d): Process didn't stop after syscall!", int(sysnr));
-
-        KITTY_LOGE("callSyscall(%d): PC(%p) | RET(%p).",
-                   int(sysnr),
-                   (void *)(return_regs.KT_REG_PC),
-                   (void *)(return_regs.KT_REG_RET));
-
+        // The thread is hijacked (gadget svc / fake regs), so its handler must not run here.
+        // An async signal (si_code<=0, e.g. a runtime SIGRTMIN+x) is unrelated to our syscall:
+        // suppress it and keep waiting. A synchronous fault (si_code>0) is a real problem with
+        // the syscall itself - re-deliver it so it surfaces rather than being masked.
         siginfo_t si = {};
         getSignalInfo(&si);
+        deliver_sig = si.si_code <= 0 ? 0 : sig;
+    }
 
-        KITTY_LOGE("callSyscall(%d): SIG(%s) | CODE(%d) | ADDR(%p).",
-                   int(sysnr),
-                   strsignal(si.si_signo),
-                   si.si_code,
-                   (void *)(si.si_addr));
-
-        auto map = KittyMemoryEx::getAddressMap(_pid, uintptr_t(si.si_addr));
-        if (map.isValid())
-        {
-            KITTY_LOGE("callSyscall(%d): MAP(<base>+%p) %s",
-                       int(sysnr),
-                       (void *)((map.offset + uintptr_t(si.si_addr)) - map.startAddress),
-                       map.toString().c_str());
-        }
-
-        if (!cont(WSTOPSIG(status)))
-            return failure_return(KT_RP_CALL_CONT_FAILED);
-
-        return failure_return(KT_RP_CALL_MISMATCH_STOP);
-
-    } while (true);
+    if (!getRegs(&return_regs))
+        return failure_return(KT_RP_CALL_REGS_FAILED);
 
     kitty_rp_call_t result = {KT_RP_CALL_SUCCESS, {static_cast<intptr_t>(return_regs.KT_REG_RET)}};
 
-    if (_syscallGadget == 0)
-    {
-        if (!pokeMem(target_pc_mem, backup_code.data(), backup_code.size()))
-        {
-            KITTY_LOGW("callSyscall(%d): Failed to restore PC(%p) memory code!", int(sysnr), (void *)target_pc_mem);
-        }
-    }
+    // Restore the code we patched in (no-op when using the gadget).
+    if (wrote_syscall && !pokeMem(exec_addr, backup_code.data(), backup_code.size()))
+        KITTY_LOGW("%s: Failed to restore code at %p!", ctx.c_str(), (void *)exec_addr);
 
     // Restore regs
     if (_autoRestoreRegs)
         setRegs(&backup_regs);
 
-    KITTY_LOGD("callSyscall(%d): returned %p.", int(sysnr), (void *)result.result.ptr);
+    KITTY_LOGD("%s: Returned %p.", ctx.c_str(), (void *)result.result.ptr);
     return result;
 }
 
 KT_BP_RESULT KittyTraceMgr::setSoftBreakpointAndWait(uintptr_t address,
-                                                     const std::function<bool(user_regs_struct regs)> &cb,
+                                                     const std::function<bool(uintptr_t bp_addr, user_regs_struct regs)> &cb,
                                                      int timeout_ms)
 {
     if (!_attached || _pid <= 0 || address == 0)
         return KT_BP_FAILED;
+
+    std::string ctx = KittyUtils::String::fmt("setSoftBreakpointAndWait(pid(%d), addr(%p))", _pid, (void *)address);
 
 #if defined(__arm__)
     bool thumb = address & 1;
@@ -943,15 +1116,22 @@ KT_BP_RESULT KittyTraceMgr::setSoftBreakpointAndWait(uintptr_t address,
 
     pid_t tid = _pid;
 
-    std::vector<uint8_t> brk_code(sizeof(uintptr_t), 0);
-    std::vector<uint8_t> bak_code(sizeof(uintptr_t), 0);
+    // Size the patch to the opcode length, else poking a wider buffer zeroes the following
+    // instruction (SEGV on x86, SIGILL on arm64).
+#if defined(__arm__)
+    const size_t bp_size = thumb ? sizeof(KittyTraceInsns::THUMB_BRKP) : sizeof(KittyTraceInsns::BRKP);
+#else
+    const size_t bp_size = sizeof(KittyTraceInsns::BRKP);
+#endif
+    std::vector<uint8_t> brk_code(bp_size, 0);
+    std::vector<uint8_t> bak_code(bp_size, 0);
     int status = 0;
     pid_t wp = 0;
     user_regs_struct regs = {};
 
     // cleanup failure return
     auto failure_return = [&](KT_BP_RESULT res = KT_BP_FAILED) -> KT_BP_RESULT {
-        KITTY_LOGE("setSoftBreakpointAndWait(%p): Failed.", (void *)address);
+        KITTY_LOGE("%s: Failed (%s).", ctx.c_str(), bpResultStr(res));
         pokeMem(address, bak_code.data(), bak_code.size());
         return res;
     };
@@ -975,7 +1155,7 @@ again:
 
     if (!peekMem(address, bak_code.data(), bak_code.size()))
     {
-        KITTY_LOGE("setSoftBreakpointAndWait(%p): Failed to backup memory code.", (void *)address);
+        KITTY_LOGE("%s: Failed to backup memory code.", ctx.c_str());
         return KT_BP_MEM_FAILED;
     }
 
@@ -990,7 +1170,7 @@ again:
 
     if (!pokeMem(address, brk_code.data(), brk_code.size()))
     {
-        KITTY_LOGE("setSoftBreakpointAndWait(%p): Failed to write brk code into memory.", (void *)address);
+        KITTY_LOGE("%s: Failed to write brk code into memory.", ctx.c_str());
         return KT_BP_MEM_FAILED;
     }
 
@@ -1007,15 +1187,12 @@ again:
             if (wp == 0)
             {
                 stop();
-                KITTY_LOGE("setSoftBreakpointAndWait(%p): timedout!", (void *)address);
+                KITTY_LOGE("%s: Timed out!", ctx.c_str());
                 pokeMem(address, bak_code.data(), bak_code.size());
                 return KT_BP_TIMEOUT;
             }
 
-            KITTY_LOGE("setSoftBreakpointAndWait(%p): waitpid returned %d. \"%s\".",
-                       (void *)address,
-                       wp,
-                       strerror(errno));
+            KITTY_LOGE("%s: waitpid returned %d. strerror=\"%s\".", ctx.c_str(), wp, strerror(errno));
 
             return failure_return(KT_BP_WAIT_FAILED);
         }
@@ -1023,18 +1200,14 @@ again:
         if (WIFEXITED(status))
         {
             _attached = false;
-            KITTY_LOGE("setSoftBreakpointAndWait(%p): Target process exited (%d).",
-                       (void *)address,
-                       WEXITSTATUS(status));
+            KITTY_LOGE("%s: Target process exited (%d).", ctx.c_str(), WEXITSTATUS(status));
             return KT_BP_EXITED;
         }
 
         if (WIFSIGNALED(status))
         {
             _attached = false;
-            KITTY_LOGE("setSoftBreakpointAndWait(%p): Target process terminated (%d).",
-                       (void *)address,
-                       WTERMSIG(status));
+            KITTY_LOGE("%s: Target process terminated (%d).", ctx.c_str(), WTERMSIG(status));
             return KT_BP_EXITED;
         }
 
@@ -1052,41 +1225,34 @@ again:
         if (!getRegs(&regs))
             return failure_return(KT_BP_REGS_FAILED);
 
+        std::string ctx = KittyUtils::String::fmt("setSoftBreakpointAndWait(pid(%d), addr(%p))", _pid, (void *)address);
         if (WSTOPSIG(status) == SIGTRAP)
         {
             if (validate_trap(regs, address))
                 break;
 
-            KITTY_LOGE("setSoftBreakpointAndWait(%p): Process didn't stop at specified Hardware Breakpoint",
-                       (void *)address);
+            KITTY_LOGE("%s: Stopped on SIGTRAP not at the breakpoint (PC=%p).", ctx.c_str(), (void *)regs.KT_REG_PC);
         }
         else
         {
-            KITTY_LOGE("setSoftBreakpointAndWait(%p): Target process didn't stop with SIGTRAP", (void *)address);
+            // An asynchronous signal (kill/sigqueue/tgkill, si_code <= 0 - e.g. a runtime
+            // SIGRTMIN+x) just means the thread hasn't reached the breakpoint yet: forward it
+            // and keep waiting. Only a synchronous fault (si_code > 0) is a real failure.
+            siginfo_t si = {};
+            getSignalInfo(&si);
+            if (si.si_code <= 0)
+            {
+                if (!cont(WSTOPSIG(status)))
+                    return failure_return(KT_BP_CONT_FAILED);
+                continue;
+            }
+
+            KITTY_LOGE("%s: Stopped with unexpected signal %s (expected SIGTRAP at the breakpoint).",
+                       ctx.c_str(),
+                       strsignal(WSTOPSIG(status)));
         }
 
-        KITTY_LOGE("setSoftBreakpointAndWait(%p): PC(%p) | RET(%p).",
-                   (void *)address,
-                   (void *)(regs.KT_REG_PC),
-                   (void *)(regs.KT_REG_RET));
-
-        siginfo_t si = {};
-        getSignalInfo(&si);
-
-        KITTY_LOGE("setSoftBreakpointAndWait(%p): SIG(%s) | CODE(%d) | ADDR(%p).",
-                   (void *)address,
-                   strsignal(si.si_signo),
-                   si.si_code,
-                   (void *)(si.si_addr));
-
-        auto map = KittyMemoryEx::getAddressMap(_pid, uintptr_t(si.si_addr));
-        if (map.isValid())
-        {
-            KITTY_LOGE("setSoftBreakpointAndWait(%p): MAP(<base>+%p) %s",
-                       (void *)address,
-                       (void *)((map.offset + uintptr_t(si.si_addr)) - map.startAddress),
-                       map.toString().c_str());
-        }
+        logFaultContext(_pid, ctx.c_str(), regs);
 
         if (!cont(WSTOPSIG(status)))
             return failure_return(KT_BP_CONT_FAILED);
@@ -1097,7 +1263,7 @@ again:
 
     if (!pokeMem(address, bak_code.data(), bak_code.size()))
     {
-        KITTY_LOGE("setSoftBreakpointAndWait(%p): Failed to restore memory code!", (void *)address);
+        KITTY_LOGE("%s: Failed to restore memory code!", ctx.c_str());
         return KT_BP_MEM_FAILED;
     }
 
@@ -1105,18 +1271,19 @@ again:
     regs.KT_REG_PC -= sizeof(KittyTraceInsns::BRKP);
     if (!setRegs(&regs))
     {
-        KITTY_LOGE("setSoftBreakpointAndWait(%p): Failed to rewind PC!", (void *)address);
+        KITTY_LOGE("%s: Failed to rewind PC!", ctx.c_str());
         return KT_BP_REGS_FAILED;
     }
 #endif
 
-    KITTY_LOGD("setSoftBreakpointAndWait(%p): Success PC(%p).", (void *)address, (void *)regs.KT_REG_PC);
+    KITTY_LOGD("%s: Success PC(%p).", ctx.c_str(), (void *)regs.KT_REG_PC);
 
-    if (cb && !cb(regs))
+    if (cb && !cb(address, regs))
     {
+        // Restore done above; single-step over the original instruction, then re-arm.
         if (!waitStep())
         {
-            KITTY_LOGE("setSoftBreakpointAndWait(%p): Failed to step past breakpoint!", (void *)address);
+            KITTY_LOGE("%s: Failed to step past breakpoint!", ctx.c_str());
             return KT_BP_STEP_FAILED;
         }
 
@@ -1130,65 +1297,58 @@ KT_BP_RESULT KittyTraceMgr::setHardBreakpointAndWait(uintptr_t address,
                                                      KT_HW_BP_TYPE type,
                                                      KT_HW_BP_SIZE size,
                                                      int slot,
-                                                     const std::function<bool(user_regs_struct regs)> &cb,
+                                                     const std::function<bool(uintptr_t bp_addr, user_regs_struct regs)> &cb,
                                                      int timeout_ms)
 {
     if (!_attached || _pid <= 0 || address == 0)
         return KT_BP_FAILED;
 
+    std::string ctx = KittyUtils::String::fmt("setHardBreakpointAndWait(pid(%d), addr(%p))", _pid, (void *)address);
+
+    const char *kind = type == KT_HW_BP_EXECUTE ? "breakpoint" : "watchpoint";
     pid_t tid = _pid;
     int status = 0;
     pid_t wp = 0;
     user_regs_struct regs = {};
 
+    // Execute breakpoints pick their width from the address (thumb vs ARM on arm32);
+    // watchpoints use the caller's size.
+#if defined(__arm__)
+    KT_HW_BP_SIZE bp_size = type != KT_HW_BP_EXECUTE ? size : ((address & 1) != 0 ? KT_HW_BP_SIZE_2 : KT_HW_BP_SIZE_4);
+#elif defined(__aarch64__)
+    KT_HW_BP_SIZE bp_size = type != KT_HW_BP_EXECUTE ? size : KT_HW_BP_SIZE_4;
+#else
+    KT_HW_BP_SIZE bp_size = type != KT_HW_BP_EXECUTE ? size : KT_HW_BP_SIZE_1;
+#endif
+
     auto failure_return = [&](KT_BP_RESULT res = KT_BP_FAILED) -> KT_BP_RESULT {
-        KITTY_LOGE("setHardBreakpointAndWait(%p): Failed.", (void *)address);
+        KITTY_LOGE("%s: Failed (%s).", ctx.c_str(), bpResultStr(res));
         clearHwBreakpoint(type, slot);
         return res;
     };
 
-    auto validate_trap = [this, size](const user_regs_struct &regs, uintptr_t trap_addr) -> bool {
-        trap_addr &= ~1;
-        trap_addr &= ~(sizeof(uintptr_t) - 1);
-        uintptr_t pc = regs.KT_REG_PC;
-        uintptr_t max_range = KT_ALIGN_UP(trap_addr + std::max(int(size), int(sizeof(KittyTraceInsns::BRKP))),
-                                          int(sizeof(uintptr_t)));
-        if (!(pc >= trap_addr && pc <= max_range))
-        {
-            siginfo_t si = {};
-            getSignalInfo(&si);
-            return uintptr_t(si.si_addr) >= trap_addr && uintptr_t(si.si_addr) <= max_range;
-        }
-        return true;
+    // A hit is ours if the kernel flagged a hw debug trap (TRAP_HWBKPT - the reliable check
+    // for watchpoints, where si_addr is the accessing instruction) or the PC/si_addr landed
+    // on the breakpoint address.
+    auto is_our_trap = [this, bp_size](const user_regs_struct &r, uintptr_t trap_addr) -> bool {
+        siginfo_t si = {};
+        getSignalInfo(&si);
+        if (si.si_code == TRAP_HWBKPT)
+            return true;
+
+        trap_addr = (trap_addr & ~uintptr_t(1)) & ~(sizeof(uintptr_t) - 1);
+        uintptr_t pc = uintptr_t(r.KT_REG_PC) & ~uintptr_t(1);
+        uintptr_t top = KT_ALIGN_UP(trap_addr + std::max(int(bp_size), int(sizeof(KittyTraceInsns::BRKP))),
+                                    int(sizeof(uintptr_t)));
+        return (pc >= trap_addr && pc <= top) || (uintptr_t(si.si_addr) >= trap_addr && uintptr_t(si.si_addr) <= top);
     };
 
 again:
 
-    if (type == KT_HW_BP_EXECUTE)
+    if (!setHwBreakpoint(address, type, bp_size, slot))
     {
-#if defined(__arm__)
-        if (!setHwBreakpoint(address, type, (address & 1) != 0 ? KT_HW_BP_SIZE_2 : KT_HW_BP_SIZE_4, slot))
-#elif defined(__aarch64__)
-        if (!setHwBreakpoint(address, type, KT_HW_BP_SIZE_4, slot))
-#else
-        if (!setHwBreakpoint(address, type, KT_HW_BP_SIZE_1, slot))
-#endif
-        {
-            KITTY_LOGE("setHardBreakpointAndWait(%p): Failed to set breakpoint. \"%s\"",
-                       (void *)address,
-                       strerror(errno));
-            return KT_BP_FAILED;
-        }
-    }
-    else
-    {
-        if (!setHwBreakpoint(address, type, size, slot))
-        {
-            KITTY_LOGE("setHardBreakpointAndWait(%p): Failed to set watchpoint. \"%s\"",
-                       (void *)address,
-                       strerror(errno));
-            return KT_BP_FAILED;
-        }
+        KITTY_LOGE("%s: Failed to set %s. strerror=\"%s\".", ctx.c_str(), kind, strerror(errno));
+        return KT_BP_FAILED;
     }
 
     if (!cont())
@@ -1204,34 +1364,22 @@ again:
             if (wp == 0)
             {
                 stop();
-                KITTY_LOGE("setHardBreakpointAndWait(%p): timedout!", (void *)address);
+                KITTY_LOGE("%s: Timed out waiting.", ctx.c_str());
                 clearHwBreakpoint(type, slot);
                 return KT_BP_TIMEOUT;
             }
 
-            KITTY_LOGE("setHardBreakpointAndWait(%p): waitpid returned %d. \"%s\".",
-                       (void *)address,
-                       wp,
-                       strerror(errno));
-
+            KITTY_LOGE("%s: waitpid returned %d. strerror=\"%s\".", ctx.c_str(), wp, strerror(errno));
             return failure_return(KT_BP_WAIT_FAILED);
         }
 
-        if (WIFEXITED(status))
+        if (WIFEXITED(status) || WIFSIGNALED(status))
         {
             _attached = false;
-            KITTY_LOGE("setHardBreakpointAndWait(%p): Target process exited (%d).",
-                       (void *)address,
-                       WEXITSTATUS(status));
-            return KT_BP_EXITED;
-        }
-
-        if (WIFSIGNALED(status))
-        {
-            _attached = false;
-            KITTY_LOGE("setHardBreakpointAndWait(%p): Target process terminated (%d).",
-                       (void *)address,
-                       WTERMSIG(status));
+            KITTY_LOGE("%s: Target process %s before the %s was hit.",
+                       ctx.c_str(),
+                       WIFEXITED(status) ? "exited" : "was killed by a signal",
+                       kind);
             return KT_BP_EXITED;
         }
 
@@ -1242,7 +1390,6 @@ again:
         {
             if (!cont())
                 return failure_return(KT_BP_CONT_FAILED);
-
             continue;
         }
 
@@ -1251,64 +1398,199 @@ again:
 
         if (WSTOPSIG(status) == SIGTRAP)
         {
-            /*siginfo_t si{};
-            getSignalInfo(&si);
-            if (si.si_code == 4)
-                break;*/
-
-            if (validate_trap(regs, address))
+            if (is_our_trap(regs, address))
                 break;
 
-            KITTY_LOGE("setHardBreakpointAndWait(%p): Process didn't stop at specified Hardware Breakpoint",
-                       (void *)address);
+            KITTY_LOGE("%s: Stopped on SIGTRAP not at the breakpoint (got PC=%p).",
+                       ctx.c_str(),
+                       (void *)regs.KT_REG_PC);
         }
         else
         {
-            KITTY_LOGE("setHardBreakpointAndWait(%p): Target process didn't stop with SIGTRAP", (void *)address);
+            KITTY_LOGE("%s: Stopped with unexpected signal %s (expected SIGTRAP at the breakpoint).",
+                       ctx.c_str(),
+                       strsignal(WSTOPSIG(status)));
         }
 
-        KITTY_LOGE("setHardBreakpointAndWait(%p): PC(%p) | RET(%p).",
-                   (void *)address,
-                   (void *)(regs.KT_REG_PC),
-                   (void *)(regs.KT_REG_RET));
-
-        siginfo_t si = {};
-        getSignalInfo(&si);
-
-        KITTY_LOGE("setHardBreakpointAndWait(%p): SIG(%s) | CODE(%d) | ADDR(%p).",
-                   (void *)address,
-                   strsignal(si.si_signo),
-                   si.si_code,
-                   (void *)(si.si_addr));
-
-        auto map = KittyMemoryEx::getAddressMap(_pid, uintptr_t(si.si_addr));
-        if (map.isValid())
-        {
-            KITTY_LOGE("setHardBreakpointAndWait(%p): MAP(<base>+%p) %s",
-                       (void *)address,
-                       (void *)((map.offset + uintptr_t(si.si_addr)) - map.startAddress),
-                       map.toString().c_str());
-        }
+        logFaultContext(_pid, ctx.c_str(), regs);
 
         if (!cont(WSTOPSIG(status)))
             return failure_return(KT_BP_CONT_FAILED);
 
-        // return failure_return(KT_BP_MISMATCH_STOP);
+        // Don't fail: a hw trap can land at a nearby PC, so forward the signal and keep waiting.
 
     } while (true);
 
-    KITTY_LOGD("setHardBreakpointAndWait(%p): Success PC(%p).", (void *)address, (void *)regs.KT_REG_PC);
-
     clearHwBreakpoint(type, slot);
 
-    if (cb && !cb(regs))
+    if (cb && !cb(address, regs))
     {
         if (!waitStep())
         {
-            KITTY_LOGE("setHardBreakpointAndWait(%p): Failed to step past breakpoint!", (void *)address);
+            KITTY_LOGE("%s: Failed to step past the %s.",
+                       ctx.c_str(),
+                       kind);
             return KT_BP_STEP_FAILED;
         }
+        goto again;
+    }
 
+    KITTY_LOGD("%s: Hit at PC %p.", ctx.c_str(), _pid, (void *)regs.KT_REG_PC);
+    return KT_BP_SUCCESS;
+}
+
+KT_BP_RESULT KittyTraceMgr::setHardExecBreakpointsAndWait(const std::vector<uintptr_t> &addresses,
+                                                          const std::function<bool(uintptr_t bp_addr, user_regs_struct regs)> &cb,
+                                                          int timeout_ms)
+{
+    if (!_attached || _pid <= 0)
+        return KT_BP_FAILED;
+
+    std::vector<uintptr_t> addrs;
+    for (uintptr_t a : addresses)
+        if (a && addrs.size() < 4)
+            addrs.push_back(a);
+
+    if (addrs.empty())
+        return KT_BP_FAILED;
+
+    pid_t tid = _pid;
+    user_regs_struct regs = {};
+    uintptr_t at_bp = 0;
+
+    auto arm_all = [&]() -> bool {
+        for (size_t i = 0; i < addrs.size(); i++)
+        {
+#if defined(__arm__)
+            KT_HW_BP_SIZE sz = (addrs[i] & 1) != 0 ? KT_HW_BP_SIZE_2 : KT_HW_BP_SIZE_4;
+#elif defined(__aarch64__)
+            KT_HW_BP_SIZE sz = KT_HW_BP_SIZE_4;
+#else
+            KT_HW_BP_SIZE sz = KT_HW_BP_SIZE_1;
+#endif
+            if (!setHwBreakpoint(addrs[i], KT_HW_BP_EXECUTE, sz, int(i)))
+            {
+                KITTY_LOGE("setHardExecBreakpointsAndWait: Failed to set breakpoint %zu at %p. strerror=\"%s\".",
+                           i,
+                           (void *)addrs[i],
+                           strerror(errno));
+                return false;
+            }
+        }
+        return true;
+    };
+
+    auto clear_all = [&]() {
+        // Reverse order: on arm64 a slot is cleared via a GETREGSET/SETREGSET that spans
+        // slots 0..n, so clearing the highest slot first keeps each lower clear from being
+        // resurrected by a later multi-slot read.
+        for (int i = int(addrs.size()) - 1; i >= 0; i--)
+            clearHwBreakpoint(KT_HW_BP_EXECUTE, i);
+    };
+
+    auto at_any_bp = [&](uintptr_t pc) -> uintptr_t {
+        pc &= ~uintptr_t(1);
+        for (uintptr_t a : addrs)
+        {
+            uintptr_t base = (a & ~uintptr_t(1)) & ~(sizeof(uintptr_t) - 1);
+            uintptr_t top = KT_ALIGN_UP(base + sizeof(KittyTraceInsns::BRKP), int(sizeof(uintptr_t)));
+            if (pc >= base && pc <= top)
+                return a;
+        }
+        return 0;
+    };
+
+again:
+
+    if (!arm_all())
+    {
+        clear_all();
+        return KT_BP_FAILED;
+    }
+
+    if (!cont())
+    {
+        clear_all();
+        return KT_BP_CONT_FAILED;
+    }
+
+    for (;;)
+    {
+        errno = 0;
+        int status = 0;
+        pid_t wp = wait(&status, WUNTRACED, timeout_ms);
+        if (wp != tid)
+        {
+            if (wp == 0)
+            {
+                stop();
+                KITTY_LOGE("setHardExecBreakpointsAndWait: Timed out waiting for pid %d.", _pid);
+                clear_all();
+                return KT_BP_TIMEOUT;
+            }
+
+            KITTY_LOGE("setHardExecBreakpointsAndWait: waitpid returned %d for pid %d. strerror=\"%s\".",
+                       wp,
+                       _pid,
+                       strerror(errno));
+            clear_all();
+            return KT_BP_WAIT_FAILED;
+        }
+
+        if (WIFEXITED(status) || WIFSIGNALED(status))
+        {
+            _attached = false;
+            KITTY_LOGE("setHardExecBreakpointsAndWait: Target pid %d %s before any breakpoint hit.",
+                       _pid,
+                       WIFEXITED(status) ? "exited" : "was terminated");
+            return KT_BP_EXITED;
+        }
+
+        if (!WIFSTOPPED(status))
+            continue;
+
+        const int sig = WSTOPSIG(status);
+        if (sig == SIGCHLD || sig == SIGSTOP || sig == SIGTSTP)
+        {
+            if (!cont())
+            {
+                clear_all();
+                return KT_BP_CONT_FAILED;
+            }
+            continue;
+        }
+
+        if (!getRegs(&regs))
+        {
+            clear_all();
+            return KT_BP_REGS_FAILED;
+        }
+
+        at_bp = at_any_bp(regs.KT_REG_PC);
+
+        siginfo_t si = {};
+        getSignalInfo(&si);
+        if (sig == SIGTRAP && (si.si_code == TRAP_HWBKPT || at_bp != 0))
+            break;
+
+        // Not one of our breakpoints: forward the signal and keep waiting.
+        logFaultContext(_pid, "setHardExecBreakpointsAndWait", regs);
+        if (!cont(sig))
+        {
+            clear_all();
+            return KT_BP_CONT_FAILED;
+        }
+    }
+
+    clear_all();
+
+    if (cb && !cb(at_bp, regs))
+    {
+        if (!waitStep())
+        {
+            KITTY_LOGE("setHardExecBreakpointsAndWait: Failed to step past the breakpoint on pid %d.", _pid);
+            return KT_BP_STEP_FAILED;
+        }
         goto again;
     }
 
@@ -1357,8 +1639,10 @@ bool KittyTraceMgr::setHwBreakpoint(uintptr_t address, KT_HW_BP_TYPE type, KT_HW
     uint32_t ctrl = enabled | privilege | (type_bits << 3) | (bas << 5);
 
 #if defined(__arm__)
-    long vr_idx = type == KT_HW_BP_EXECUTE ? (((slot * 2) + 1)) : (-(slot * 2) + 1);
-    long cr_idx = type == KT_HW_BP_EXECUTE ? (((slot * 2) + 2)) : (-(slot * 2) + 2);
+    // ARM PTRACE_*HBPREGS index convention: breakpoints use positive register
+    // numbers (value=2N+1, control=2N+2), watchpoints use the negated form.
+    long vr_idx = type == KT_HW_BP_EXECUTE ? ((slot * 2) + 1) : -((slot * 2) + 1);
+    long cr_idx = type == KT_HW_BP_EXECUTE ? ((slot * 2) + 2) : -((slot * 2) + 2);
     return ptrace(PTRACE_SETHBPREGS, tid, vr_idx, &address) != -1L &&
            ptrace(PTRACE_SETHBPREGS, tid, cr_idx, &ctrl) != -1L;
 
@@ -1460,8 +1744,10 @@ bool KittyTraceMgr::clearHwBreakpoint(KT_HW_BP_TYPE type, int slot)
 #if defined(__arm__)
     uintptr_t address = 0;
     uint32_t ctrl = 0;
-    long vr_idx = type == KT_HW_BP_EXECUTE ? (((slot * 2) + 1)) : (-(slot * 2) + 1);
-    long cr_idx = type == KT_HW_BP_EXECUTE ? (((slot * 2) + 2)) : (-(slot * 2) + 2);
+    // ARM PTRACE_*HBPREGS index convention: breakpoints use positive register
+    // numbers (value=2N+1, control=2N+2), watchpoints use the negated form.
+    long vr_idx = type == KT_HW_BP_EXECUTE ? ((slot * 2) + 1) : -((slot * 2) + 1);
+    long cr_idx = type == KT_HW_BP_EXECUTE ? ((slot * 2) + 2) : -((slot * 2) + 2);
     return ptrace(PTRACE_SETHBPREGS, tid, vr_idx, &address) != -1L &&
            ptrace(PTRACE_SETHBPREGS, tid, cr_idx, &ctrl) != -1L;
 

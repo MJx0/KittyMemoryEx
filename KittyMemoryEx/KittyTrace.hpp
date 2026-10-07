@@ -6,10 +6,14 @@
 #include <sys/ptrace.h>
 #include <sys/wait.h>
 #include <sys/user.h>
+#include <csignal>
+#include <cstring>
 #include <cerrno>
 #include <functional>
 #include <type_traits>
 
+#include <csignal>
+#include <cstring>
 #include "KittyUtils.hpp"
 #include "KittyMemoryEx.hpp"
 
@@ -206,7 +210,8 @@ private:
 
 public:
     KittyTraceMgr()
-        : _pid(0), _defaultCaller(0), _attached(false), _seized(false), _autoRestoreRegs(true), _remoteCallTimeout(0), _syscallGadget(0)
+        : _pid(0), _defaultCaller(0), _attached(false), _seized(false), _autoRestoreRegs(true), _remoteCallTimeout(0),
+          _syscallGadget(0)
     {
     }
 
@@ -218,7 +223,11 @@ public:
      * @param autoRestoreRegs Whether to automatically restore registers on remote function calls (optional).
      * @param remoteCallTimeout The default remote call timeout (optional).
      */
-    KittyTraceMgr(pid_t pid, uintptr_t defaultCaller = 0, bool autoRestoreRegs = true, int remoteCallTimeout = 0, uintptr_t syscallGadget = 0)
+    KittyTraceMgr(pid_t pid,
+                  uintptr_t defaultCaller = 0,
+                  bool autoRestoreRegs = true,
+                  int remoteCallTimeout = 0,
+                  uintptr_t syscallGadget = 0)
         : _pid(pid), _defaultCaller(defaultCaller), _attached(isAttached()), _seized(false),
           _autoRestoreRegs(autoRestoreRegs), _remoteCallTimeout(remoteCallTimeout), _syscallGadget(syscallGadget)
     {
@@ -230,6 +239,14 @@ public:
     inline pid_t pid() const
     {
         return _pid;
+    }
+
+    /**
+     * @brief Check if the process is alive.
+     */
+    inline bool isAlive() const
+    {
+        return _pid >= 0 ? kill(_pid, 0) == 0 : false;
     }
 
     /**
@@ -565,27 +582,37 @@ public:
      * @note Breakpoint will be set into on traced thread.
      */
     KT_BP_RESULT setSoftBreakpointAndWait(uintptr_t address,
-                                          const std::function<bool(user_regs_struct regs)> &cb,
+                                          const std::function<bool(uintptr_t bp_addr, user_regs_struct regs)> &cb,
                                           int timeout_ms);
 
     /**
-     * @brief Sets and wait for hardware breakpoint at a given address.
-     * @param address The address to set the breakpoint at.
-     * @param type The type of hardware breakpoint (e.g., execute, read, write, access).
-     * @param size The size of the data to watch (ignored if bp type is KT_HW_BP_EXECUTE).
-     * @param slot The slot number for the breakpoint.
-     * @param cb Callback function to be executed when the breakpoint is hit.
-     * @param timeout_ms Timeout in milliseconds (0 or negative value, will disable timeout)
+     * @brief Set and wait for a hardware breakpoint/watchpoint at a single address.
+     * @param address The address to break/watch.
+     * @param type The type of hardware breakpoint (execute, read, write, access).
+     * @param size The size to watch (ignored for execute breakpoints; width is picked per address).
+     * @param slot The debug slot to use.
+     * @param cb Callback run on a hit; return true to accept (stop), false to skip and keep waiting.
+     * @param timeout_ms Timeout in milliseconds (0 or negative disables it).
      * @return Value of KT_BP_RESULT enum.
-     *
-     * @note Breakpoint will be set into slot 0 on traced thread.
      */
     KT_BP_RESULT setHardBreakpointAndWait(uintptr_t address,
                                           KT_HW_BP_TYPE type,
                                           KT_HW_BP_SIZE size,
                                           int slot,
-                                          const std::function<bool(user_regs_struct regs)> &cb,
+                                          const std::function<bool(uintptr_t bp_addr, user_regs_struct regs)> &cb,
                                           int timeout_ms);
+
+    /**
+     * @brief Set hardware execute breakpoints on several addresses (one per debug slot) and
+     *        wait for whichever is hit first. Thumb/ARM width is chosen per address.
+     * @param addresses Code addresses to break on (capped to the number of debug slots).
+     * @param cb Callback run on a hit; return true to accept (stop), false to skip and keep waiting.
+     * @param timeout_ms Timeout in milliseconds (0 or negative disables it).
+     * @return Value of KT_BP_RESULT enum.
+     */
+    KT_BP_RESULT setHardExecBreakpointsAndWait(const std::vector<uintptr_t> &addresses,
+                                               const std::function<bool(uintptr_t bp_addr, user_regs_struct regs)> &cb,
+                                               int timeout_ms);
 
     /**
      * @brief Sets a hardware breakpoint on a specified address for traced thread.
