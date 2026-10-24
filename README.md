@@ -1,21 +1,27 @@
 # KittyMemoryEx
 
-KittyMemoryEx is the external implementation of [KittyMemory](https://github.com/MJx0/KittyMemory): the same memory patching, scanning, dumping, ELF introspection toolkit, but for remote processes on **Android** and **Linux**. It adds remote memory I/O, ptrace-based process control, hardware/software breakpoints, remote function/syscall calls. It is the memory backend used by [AndKittyInjector](https://github.com/MJx0/AndKittyInjector).
+KittyMemoryEx is a native C++ library for external runtime memory patching, scanning, and dumping, with dynamic module ELF inspection and analysis for **Android** and **Linux**.
+
+KittyMemoryEx is the external implementation of [KittyMemory](https://github.com/MJx0/KittyMemory): It adds remote memory I/O, ptrace-based process control, hardware/software breakpoints, remote function/syscall calls. It is the memory backend used by [AndKittyInjector](https://github.com/MJx0/AndKittyInjector).
 
 ## Features
 
 - **Two remote memory backends**, selected per `KittyMemoryMgr::initialize()` call:
   - `EK_MEM_OP_SYSCALL` — `process_vm_readv` / `process_vm_writev`.
   - `EK_MEM_OP_IO` — `/proc/<pid>/mem` via `pread`/`pwrite` (also used transparently for patching even when the primary backend is `EK_MEM_OP_SYSCALL`, since patch writes to non-writable text pages need `/proc/pid/mem` semantics).
-- **Memory patch & backup that work on remote processes** — `MemoryPatch`/`MemoryBackup`, built from raw bytes, hex, or Keystone-assembled instructions, exactly like KittyMemory but bound to an `IKittyMemOp*` instead of the local process.
-- **Pattern scanning** — the same four search modes as KittyMemory (bytes+mask, hex+mask, IDA pattern, raw data), streamed through the target process in 1 MiB chunks that skip unmapped pages.
-- **ELF scanner & symbol lookup** — `ElfScannerMgr::findElf`, `findSymbolAll` (locate a library across every mapped ELF in the target, even if renamed), and `findRemoteSymbol` (resolve a symbol you already have the address of locally, e.g. `mmap`, to its equivalent address in the target process — the basis for remote function calls).
-- **ptrace utilities (`KittyTraceMgr`)** — attach (`PTRACE_ATTACH`) or seize (`PTRACE_SEIZE`), stop/continue/single-step, register get/set, and:
-  - **Remote function/syscall calls** — `callFunction`, `callFunctionFrom`, `callSyscall`, ABI-aware per architecture (arm/arm64/x86/x86_64).
+- **Memory patch & backup** — `MemoryPatch`/`MemoryBackup`, built from raw bytes, hex, or Keystone-assembled instructions.
+- **Pattern scan** — (bytes+mask, hex+mask, IDA pattern, raw data), streamed through the target process in 1 MiB chunks that skip unmapped pages.
+- **ELF inspection & analysis**
+  - `ElfScannerMgr` parses a loaded library's program headers, dynamic section, and symbol/hash tables directly out of memory (no need for the file on disk), including libraries mapped from inside a split APK/zip.
+  - Symbol lookup covers both the live dynamic symbol table (`findSymbol`) and on-disk debug symbols (`dsymbols`, `findDebugSymbol` — for symbols not dynamically exported).
+  - Segment discovery exposes the module's main segment (`baseSegment()`), all mapped segments (`segments()`), and its BSS segments (`bssSegments()`), each as a `KittyMemory::ProcMap`.
+- **ptrace utilities (`KittyTraceMgr`)**
+  - `attach` (`PTRACE_ATTACH`) or `seize` (`PTRACE_SEIZE`), stop/continue/single-step, read or write registers.
+  - Remote function/syscall calls — `callFunction`, `callFunctionFrom`, `callSyscall`, ABI-aware per architecture (arm/arm64/x86/x86_64).
   - **Hardware & software breakpoints** — `setHardBreakpointAndWait` (debug registers — execute/read/write/access, no code patching) and `setSoftBreakpointAndWait` (trap-instruction patching), both blocking-with-callback and re-armable.
-- **`KittyPerfWatch` / `KittyPerfTrap`** — `perf_event_open`-based hardware watchpoints as a pollable/signal-driven alternative to ptrace single-stepping.
-- **Android linker & NativeBridge scanners** — enumerate every natively-loaded (`LinkerScannerMgr`) or emulated (`NativeBridgeScannerMgr`) library by walking the linker's internal `solist`.
-- **Memory maps**
+- **Hardware watchpoints** - `KittyPerfWatch` / `KittyPerfTrap` are `perf_event_open`based hardware watchpoints as a pollable/signal-driven alternative to ptrace single-stepping.
+- **Android Linker & NativeBridge scanners** — enumerate every natively-loaded via (`LinkerScannerMgr`) or emulated (`NativeBridgeScannerMgr`) library by walking the linker's internal `solist`.
+- **Memory maps & status**
   - `KittyMemoryEx::ProcMap` models one `/proc/<pid>/maps` entry of the *target* process (bounds, permissions, backing file).
   - `getAllMaps(pid)` / `getMaps(pid, EProcMapFilter, name)` (`Equal`/`Contains`/`StartWith`/`EndWith`/`Regex`) / `getAddressMap(pid, address)` enumerate and filter memory maps.
   - `getFileMappings(pid, path)` groups a backing file's mappings into contiguous runs, same semantics as KittyMemory.
@@ -30,7 +36,6 @@ KittyMemoryEx is the external implementation of [KittyMemory](https://github.com
 
 - C++17 or newer.
 - Android: NDK, API level 21 or newer.
-- iOS: [Theos](https://theos.dev/) or xcode for building tweaks/dylibs, deployment target iOS 14.0+.
 - [Keystone Assembler](https://github.com/keystone-engine/keystone) — only needed for `MemoryPatch::createWithAsm`. Prebuilt static libraries for android already vendored under [`KittyMemory/Deps/Keystone`](KittyMemory/Deps/Keystone/); You can rebuild them yourself with `Deps/Keystone/build_keystone_android.sh` / `build_keystone_linux.sh`. If you don't want Keystone dependency then Define `kNO_KEYSTONE` in your project's C++ flags (this removes `createWithAsm`).
 - **Root / ptrace considerations**: reading or writing another process's memory (via `process_vm_readv/writev`, `/proc/pid/mem`, or `ptrace`) requires matching UID/ptrace scope permissions or root.
 
@@ -114,7 +119,7 @@ public:
      *
      * @return UTF-8 string stored in remote memory.
      */
-    std::string readUTF8(uintptr_t address, size_t maxLen);
+    std::string readMemUTF8(uintptr_t address, size_t maxLen);
     /**
      * @brief Reads a UTF-16 encoded string from remote process memory.
      *
@@ -125,7 +130,7 @@ public:
      *
      * @return UTF-16 string stored in remote memory.
      */
-    std::u16string readUTF16(uintptr_t address, size_t maxLen);
+    std::u16string readMemUTF16(uintptr_t address, size_t maxLen);
 
     /**
      * @brief Reads a UTF-32 encoded string from remote process memory.
@@ -137,7 +142,7 @@ public:
      *
      * @return UTF-32 string stored in remote memory.
      */
-    std::u32string readUTF32(uintptr_t address, size_t maxLen);
+    std::u32string readMemUTF32(uintptr_t address, size_t maxLen);
 
     /**
      * @brief Reads a platform wchar_t string from remote process memory.
@@ -149,7 +154,7 @@ public:
      *
      * @return Wide string stored in remote memory.
      */
-    std::wstring readWStr(uintptr_t address, size_t maxLen);
+    std::wstring readMemWStr(uintptr_t address, size_t maxLen);
 
     /**
      * @brief Reads a UTF-8 string from remote process memory.
