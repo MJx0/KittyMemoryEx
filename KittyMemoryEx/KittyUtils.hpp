@@ -131,6 +131,7 @@ typedef struct stat64 kt_stat64_t;
     do                                                                                                                 \
     {                                                                                                                  \
         fflush(stdout);                                                                                                \
+        fflush(stderr);                                                                                                \
         fprintf(stderr, "E: " fmt "\n", ##__VA_ARGS__);                                                                \
         fflush(stderr);                                                                                                \
     } while (0)
