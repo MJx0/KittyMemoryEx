@@ -1,6 +1,9 @@
 #pragma once
 
+#include <cstdarg>
+#include <cstddef>
 #include <cstdint>
+#include <csignal>
 #include <cstring>
 #include <sys/mman.h>
 #include <sys/ptrace.h>
@@ -11,9 +14,9 @@
 #include <cerrno>
 #include <functional>
 #include <type_traits>
+#include <utility>
+#include <vector>
 
-#include <csignal>
-#include <cstring>
 #include "KittyUtils.hpp"
 #include "KittyMemoryEx.hpp"
 
@@ -174,12 +177,26 @@ namespace KittyTraceInsns
 #endif
 } // namespace KittyTraceInsns
 
-#define KT_REGS_ALIGN_STACK(regs) regs.KT_REG_SP = uintptr_t(intptr_t(intptr_t(regs.KT_REG_SP) & intptr_t(~0xF)))
+#define KT_REGS_ALIGN_STACK(regs)                                                                                      \
+    do                                                                                                                 \
+    {                                                                                                                  \
+        regs.KT_REG_SP = uintptr_t(intptr_t(intptr_t(regs.KT_REG_SP) & intptr_t(~0xF)));                               \
+    } while (false)
 #define KT_REGS_ALIGN_STACK_N(regs, n)                                                                                 \
-    regs.KT_REG_SP = uintptr_t(intptr_t((intptr_t(regs.KT_REG_SP) - intptr_t(n)) & intptr_t(~0xF)))
-
-#define KT_ALIGN_STACK(s) s = uintptr_t(intptr_t(intptr_t(s) & intptr_t(~0xF)))
-#define KT_ALIGN_STACK_N(s, n) s = uintptr_t(intptr_t((intptr_t(s) - intptr_t(n)) & intptr_t(~0xF)))
+    do                                                                                                                 \
+    {                                                                                                                  \
+        regs.KT_REG_SP = uintptr_t(intptr_t((intptr_t(regs.KT_REG_SP) - intptr_t(n)) & intptr_t(~0xF)));               \
+    } while (false)
+#define KT_ALIGN_STACK(s)                                                                                              \
+    do                                                                                                                 \
+    {                                                                                                                  \
+        s = uintptr_t(intptr_t(intptr_t(s) & intptr_t(~0xF)));                                                         \
+    } while (false)
+#define KT_ALIGN_STACK_N(s, n)                                                                                         \
+    do                                                                                                                 \
+    {                                                                                                                  \
+        s = uintptr_t(intptr_t((intptr_t(s) - intptr_t(n)) & intptr_t(~0xF)));                                         \
+    } while (false)
 
 /**
  * @brief A structure to hold result data of a remote process function call.
@@ -205,6 +222,16 @@ private:
     bool _attached, _seized, _autoRestoreRegs;
     int _remoteCallTimeout;
     uintptr_t _syscallGadget;
+
+    template <class T>
+    static inline uintptr_t _toRemoteArg(T &&v)
+    {
+        using DecayedType = std::decay_t<T>;
+        static_assert(std::is_integral_v<DecayedType> || std::is_enum_v<DecayedType> ||
+                          std::is_pointer_v<DecayedType> || std::is_null_pointer_v<DecayedType>,
+                      "remote call arguments must be integers, enums or pointers");
+        return static_cast<uintptr_t>(v);
+    }
 
     kitty_rp_call_t _callFunctionFrom(uintptr_t callerAddress, uintptr_t functionAddress, int nargs, ...);
     kitty_rp_call_t _callSyscall(long sysnr, int nargs, ...);
@@ -545,7 +572,7 @@ public:
     template <class... Args>
     kitty_rp_call_t callFunctionFrom(uintptr_t callerAddress, uintptr_t functionAddress, Args &&...a)
     {
-        return _callFunctionFrom(callerAddress, functionAddress, sizeof...(a), std::forward<Args>(a)...);
+        return _callFunctionFrom(callerAddress, functionAddress, sizeof...(a), _toRemoteArg(std::forward<Args>(a))...);
     }
 
     /**
@@ -557,7 +584,7 @@ public:
     template <class... Args>
     kitty_rp_call_t callFunction(uintptr_t functionAddress, Args &&...a)
     {
-        return _callFunctionFrom(_defaultCaller, functionAddress, sizeof...(a), std::forward<Args>(a)...);
+        return _callFunctionFrom(_defaultCaller, functionAddress, sizeof...(a), _toRemoteArg(std::forward<Args>(a))...);
     }
 
     /**
@@ -570,7 +597,7 @@ public:
     template <class... Args>
     kitty_rp_call_t callSyscall(long sysnr, Args &&...a)
     {
-        return _callSyscall(sysnr, sizeof...(a), std::forward<Args>(a)...);
+        return _callSyscall(sysnr, sizeof...(a), _toRemoteArg(std::forward<Args>(a))...);
     }
 
     /**
