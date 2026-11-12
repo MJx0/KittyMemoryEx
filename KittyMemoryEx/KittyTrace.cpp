@@ -26,6 +26,8 @@ static const char *rpCallStatusStr(KT_RP_CALL_STATUS status)
         return "NOT_STOPPED";
     case KT_RP_CALL_MISMATCH_STOP:
         return "MISMATCH_STOP";
+    case KT_RP_CALL_INVALID_NARGS:
+        return "INVALID_NARGS";
     }
 
     return "UNKNOWN";
@@ -858,6 +860,10 @@ kitty_rp_call_t KittyTraceMgr::_callSyscall(long sysnr, int nargs, ...)
     if (!_attached || _pid <= 0)
         return {KT_RP_CALL_FAILED, {0}};
 
+    static constexpr int kMax_NArgs = 6;
+    if (nargs > kMax_NArgs)
+        return {KT_RP_CALL_INVALID_NARGS, {0}};
+
     std::string ctx = KittyUtils::String::fmt("callSyscall(pid(%d), sysnr(%d))", _pid, int(sysnr));
 
     user_regs_struct backup_regs, return_regs, tmp_regs;
@@ -876,7 +882,7 @@ kitty_rp_call_t KittyTraceMgr::_callSyscall(long sysnr, int nargs, ...)
 
     KT_REGS_ALIGN_STACK(tmp_regs);
 
-    std::vector<uintptr_t> vargs(6, 0);
+    std::vector<uintptr_t> vargs(kMax_NArgs, 0);
     if (nargs > 0)
     {
         va_list vl;
@@ -969,7 +975,7 @@ kitty_rp_call_t KittyTraceMgr::_callSyscall(long sysnr, int nargs, ...)
 #endif
 
 #if defined(__arm__) || defined(__aarch64__)
-    for (int i = 0; i < 6; i++)
+    for (int i = 0; i < kMax_NArgs; i++)
     {
 #if defined(__arm__)
         tmp_regs.uregs[i] = vargs[i];
@@ -1095,9 +1101,10 @@ kitty_rp_call_t KittyTraceMgr::_callSyscall(long sysnr, int nargs, ...)
     return result;
 }
 
-KT_BP_RESULT KittyTraceMgr::setSoftBreakpointAndWait(uintptr_t address,
-                                                     const std::function<bool(uintptr_t bp_addr, user_regs_struct regs)> &cb,
-                                                     int timeout_ms)
+KT_BP_RESULT KittyTraceMgr::setSoftBreakpointAndWait(
+    uintptr_t address,
+    const std::function<bool(uintptr_t bp_addr, user_regs_struct regs)> &cb,
+    int timeout_ms)
 {
     if (!_attached || _pid <= 0 || address == 0)
         return KT_BP_FAILED;
@@ -1293,12 +1300,13 @@ again:
     return KT_BP_SUCCESS;
 }
 
-KT_BP_RESULT KittyTraceMgr::setHardBreakpointAndWait(uintptr_t address,
-                                                     KT_HW_BP_TYPE type,
-                                                     KT_HW_BP_SIZE size,
-                                                     int slot,
-                                                     const std::function<bool(uintptr_t bp_addr, user_regs_struct regs)> &cb,
-                                                     int timeout_ms)
+KT_BP_RESULT KittyTraceMgr::setHardBreakpointAndWait(
+    uintptr_t address,
+    KT_HW_BP_TYPE type,
+    KT_HW_BP_SIZE size,
+    int slot,
+    const std::function<bool(uintptr_t bp_addr, user_regs_struct regs)> &cb,
+    int timeout_ms)
 {
     if (!_attached || _pid <= 0 || address == 0)
         return KT_BP_FAILED;
@@ -1427,9 +1435,7 @@ again:
     {
         if (!waitStep())
         {
-            KITTY_LOGE("%s: Failed to step past the %s.",
-                       ctx.c_str(),
-                       kind);
+            KITTY_LOGE("%s: Failed to step past the %s.", ctx.c_str(), kind);
             return KT_BP_STEP_FAILED;
         }
         goto again;
@@ -1439,9 +1445,10 @@ again:
     return KT_BP_SUCCESS;
 }
 
-KT_BP_RESULT KittyTraceMgr::setHardExecBreakpointsAndWait(const std::vector<uintptr_t> &addresses,
-                                                          const std::function<bool(uintptr_t bp_addr, user_regs_struct regs)> &cb,
-                                                          int timeout_ms)
+KT_BP_RESULT KittyTraceMgr::setHardExecBreakpointsAndWait(
+    const std::vector<uintptr_t> &addresses,
+    const std::function<bool(uintptr_t bp_addr, user_regs_struct regs)> &cb,
+    int timeout_ms)
 {
     if (!_attached || _pid <= 0)
         return KT_BP_FAILED;
